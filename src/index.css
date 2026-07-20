@@ -1,0 +1,240 @@
+@import "tailwindcss";
+
+/* ===================================================================
+   ROSTRUM EDUCATION FLIPBOOK — Design System
+   Brand Colors: Navy #152F7A, Blue #2F4DA4, Crimson #740D28, Red #CE1D47
+   =================================================================== */
+
+@theme {
+  /* Brand palette */
+  --color-brand-navy: #152F7A;
+  --color-brand-blue: #2F4DA4;
+  --color-brand-crimson: #740D28;
+  --color-brand-red: #CE1D47;
+
+  /* Extended palette — derived from brand */
+  --color-brand-navy-light: #1e3f99;
+  --color-brand-navy-dark: #0e1f52;
+  --color-brand-red-light: #e8325c;
+  --color-brand-red-dark: #a01838;
+
+  /* Neutral tones */
+  --color-surface-primary: #fff;
+  --color-surface-secondary: #f8fafc;
+  --color-surface-elevated: #f1f5f9;
+  --color-surface-card: rgba(255, 255, 255, 0.8);
+
+  --color-text-primary: #F1F5F9;
+  --color-text-secondary: #94A3B8;
+  --color-text-muted: #64748B;
+
+  --color-border-subtle: rgba(148, 163, 184, 0.12);
+  --color-border-accent: rgba(206, 29, 71, 0.3);
+
+  /* Fonts */
+  --font-display: 'Playfair Display', Georgia, 'Times New Roman', serif;
+  --font-body: 'Inter', system-ui, -apple-system, sans-serif;
+
+  /* Shadows */
+  --shadow-book: 0 25px 60px rgba(0, 0, 0, 0.5), 0 8px 20px rgba(0, 0, 0, 0.3);
+  --shadow-card: 0 8px 32px rgba(0, 0, 0, 0.3), 0 2px 8px rgba(0, 0, 0, 0.2);
+  --shadow-card-hover: 0 16px 48px rgba(0, 0, 0, 0.4), 0 4px 16px rgba(0, 0, 0, 0.3);
+  --shadow-control: 0 4px 16px rgba(0, 0, 0, 0.4);
+
+  /* Animation timing */
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out-expo: cubic-bezier(0.87, 0, 0.13, 1);
+}
+
+/* ===================================================================
+   Google Fonts — loaded via <link> in index.html for Playfair Display + Inter
+   =================================================================== */
+
+/* ===================================================================
+   Global Reset & Base Styles
+   =================================================================== */
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html {
+  font-family: var(--font-body);
+  background-color: var(--color-surface-primary);
+  color: var(--color-text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow-x: hidden;
+}
+
+body {
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+#root {
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+/* ===================================================================
+   Scrollbar Styling
+   =================================================================== */
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-text-muted);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-secondary);
+}
+
+/* ===================================================================
+   Utility Classes
+   =================================================================== */
+
+   /* Kill default black corner-drag hint & shadows */
+.stf__item .page-shadow,
+.stf__item .set-corner,
+.stf__item .stf__hardShadow,
+.stf__item .stf__hardInnerShadow,
+.stf__item .stf__outerShadow,
+.stf__item .stf__innerShadow {
+  background: transparent !important;
+  background-image: none !important;
+  box-shadow: none !important;
+}
+
+/* Ensure the page + book container never show black underneath */
+.stf__page,
+.stf__block,
+.stf__parent {
+  background-color: #fff !important;
+}
+
+.glass {
+  background: var(--color-surface-card);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid var(--color-border-subtle);
+}
+
+.glass-strong {
+  background: rgba(11, 15, 26, 0.85);
+  backdrop-filter: blur(32px) saturate(200%);
+  -webkit-backdrop-filter: blur(32px) saturate(200%);
+  border: 1px solid var(--color-border-subtle);
+}
+
+/* Loading shimmer animation */
+@keyframes shimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+.shimmer {
+  position: relative;
+  overflow: hidden;
+}
+
+.shimmer::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.04),
+    transparent
+  );
+  animation: shimmer 2s ease-in-out infinite;
+}
+
+/* Page flip shadow */
+.flip-shadow {
+  box-shadow: var(--shadow-book);
+}
+
+/* Book spine gradient */
+.book-spine {
+  background: linear-gradient(
+    90deg,
+    rgba(0, 0, 0, 0.3) 0%,
+    rgba(0, 0, 0, 0.05) 10%,
+    transparent 20%,
+    transparent 80%,
+    rgba(0, 0, 0, 0.05) 90%,
+    rgba(0, 0, 0, 0.3) 100%
+  );
+}
+
+/* Focus visible styles for accessibility */
+:focus-visible {
+  outline: 2px solid var(--color-brand-red);
+  outline-offset: 2px;
+}
+
+/* Reduced motion preference */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ===================================================================
+   react-pageflip overrides
+   =================================================================== */
+
+.stf__wrapper {
+  margin: 0 auto;
+}
+
+.stf__parent {
+  overflow: visible !important;
+}
+
+/* Ensure page canvases render crisply */
+.page-canvas canvas {
+  image-rendering: auto;
+  image-rendering: -webkit-optimize-contrast;
+}
+
+.stf__wrapper[data-cover-view="true"] .stf__item:first-child {
+  box-shadow: none !important;
+  border: none !important;
+}
+
+.stf__parent {
+  overflow: visible !important;
+  z-index: 1;
+}
+
+.stf__block {
+  z-index: 10;
+}
+
+.stf__item {
+  z-index: 10;
+}
+
+/* The actively curling page needs the highest stacking during a flip */
+.stf__item.--simple,
+.stf__item.--soft {
+  z-index: 20;
+}
