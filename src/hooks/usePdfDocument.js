@@ -5,11 +5,30 @@ import * as pdfjsLib from 'pdfjs-dist';
 pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdfjs-dist/build/pdf.worker.min.mjs';
 
 /**
+ * Progressive PDF load options.
+ * PDFs are linearized — with range requests + disableAutoFetch, pdf.js can
+ * open after the first chunks and only fetch bytes for pages you render.
+ */
+export const PDF_LOAD_OPTIONS = {
+  cMapUrl: '/pdfjs-dist/cmaps/',
+  cMapPacked: true,
+  standardFontDataUrl: '/pdfjs-dist/standard_fonts/',
+  wasmUrl: '/pdfjs-dist/wasm/',
+  enableXfa: true,
+  // Stream + HTTP Range (requires Accept-Ranges from the host)
+  disableStream: false,
+  disableRange: false,
+  // Don't download the rest of the file until pages are requested
+  disableAutoFetch: true,
+  // Smaller first chunks → faster time-to-first-page on slow networks
+  rangeChunkSize: 65536,
+};
+
+/**
  * Hook to load and cache a PDF document via pdfjs-dist.
  * Returns the document proxy, page count, loading state, and download progress.
- * 
+ *
  * @param {string} pdfSrc - URL path to the PDF file (e.g., '/pdfs/UG26.pdf')
- * @returns {{ pdfDocument, numPages, loading, progress, error }}
  */
 export function usePdfDocument(pdfSrc) {
   const [pdfDocument, setPdfDocument] = useState(null);
@@ -19,50 +38,55 @@ export function usePdfDocument(pdfSrc) {
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState(null);
 
-  // Cache ref to avoid re-loading the same PDF
   const loadedSrcRef = useRef(null);
   const documentRef = useRef(null);
 
   useEffect(() => {
     if (!pdfSrc) return;
 
-    // Skip if we've already loaded this exact PDF
     if (loadedSrcRef.current === pdfSrc && documentRef.current) {
       setPdfDocument(documentRef.current);
       setNumPages(documentRef.current.numPages);
       setLoading(false);
+      setProgress(100);
       return;
     }
 
     let cancelled = false;
+    let loadingTask = null;
 
     const loadPdf = async () => {
       setLoading(true);
       setProgress(0);
       setError(null);
+      setPdfDocument(null);
+      setNumPages(0);
 
       try {
-        const loadingTask = pdfjsLib.getDocument({
+        loadingTask = pdfjsLib.getDocument({
           url: pdfSrc,
-          // Point to local copies of assets to fix image rendering and missing font issues
-          cMapUrl: '/pdfjs-dist/cmaps/',
-          cMapPacked: true,
-          standardFontDataUrl: '/pdfjs-dist/standard_fonts/',
-          wasmUrl: '/pdfjs-dist/wasm/',
-          enableXfa: true,
+          ...PDF_LOAD_OPTIONS,
         });
 
-        // Track download progress
         loadingTask.onProgress = ({ loaded, total }) => {
-          if (!cancelled && total > 0) {
-            setProgress(Math.round((loaded / total) * 100));
-          } else if (!cancelled && loaded > 0) {
-            // Some hosts omit Content-Length — show indeterminate progress
-            setProgress((prev) => (prev < 90 ? Math.max(prev, 10) : prev));
+          if (cancelled) return;
+          if (total > 0) {
+            // With range/auto-fetch off, "total" is file size but loaded is
+            // only what we've pulled so far — cap UI so it doesn't look stuck.
+            const pct = Math.min(95, Math.round((loaded / total) * 100));
+            setProgress((prev) => Math.max(prev, pct));
+          } else if (loaded > 0) {
+            setProgress((prev) => (prev < 90 ? Math.max(prev, 15) : prev));
           }
         };
 
         const doc = await loadingTask.promise;
+        if (cancelled) {
+          doc.destroy?.();
+          return;
+        }
+
+        // First page metadata is enough to size the book and paint the cover
         let aspect = 1 / 1.414;
         try {
           const firstPage = await doc.getPage(1);
@@ -79,7 +103,7 @@ export function usePdfDocument(pdfSrc) {
           setNumPages(doc.numPages);
           setAspectRatio(aspect);
           setLoading(false);
-          setProgress(100);
+          setProgress((prev) => Math.max(prev, 100));
         }
       } catch (err) {
         if (!cancelled) {
@@ -94,13 +118,14 @@ export function usePdfDocument(pdfSrc) {
 
     return () => {
       cancelled = true;
+      try {
+        loadingTask?.destroy?.();
+      } catch {
+        // ignore
+      }
     };
   }, [pdfSrc]);
 
-  /**
-   * Get a single page proxy (cached internally by PDF.js).
-   * @param {number} pageNum - 1-indexed page number
-   */
   const getPage = useCallback(async (pageNum) => {
     if (!pdfDocument || pageNum < 1 || pageNum > numPages) return null;
     return pdfDocument.getPage(pageNum);

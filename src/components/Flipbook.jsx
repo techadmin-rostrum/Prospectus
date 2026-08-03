@@ -441,8 +441,8 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
                       width={pageW}
                       height={pageH}
                       extraScale={1}
-                      priority={Math.abs(currentPage - i) <= 2 || (currentPage === 0 && i <= 2)}
-                      shouldRender={Math.abs(currentPage - i) <= 4 || (currentPage === 0 && i <= 3)}
+                      priority={Math.abs(currentPage - i) <= 1 || (currentPage === 0 && i <= 1)}
+                      shouldRender={Math.abs(currentPage - i) <= 2 || (currentPage === 0 && i <= 2)}
                     />
                   ))}
                 </HTMLFlipBook>

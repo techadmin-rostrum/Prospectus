@@ -33,7 +33,7 @@ export default function LoadingSkeleton({ progress = 0 }) {
       <div className="w-64 max-w-[80vw]">
         <div className="flex justify-between items-center mb-2">
           <span className="text-sm text-white/70 font-body">
-            Loading prospectus…
+            Opening prospectus…
           </span>
           <span className="text-sm text-white/50 font-mono">
             {progress}%

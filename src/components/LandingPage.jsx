@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router';
 import { motion } from 'motion/react';
 import * as pdfjsLib from 'pdfjs-dist';
+import { PDF_LOAD_OPTIONS } from '../hooks/usePdfDocument';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdfjs-dist/build/pdf.worker.min.mjs';
 
@@ -86,11 +87,7 @@ function ProspectusCard({ title, subtitle, pdfSrc, onClick, delay, colorClass })
       try {
         const loadingTask = pdfjsLib.getDocument({
           url: pdfSrc,
-          cMapUrl: '/pdfjs-dist/cmaps/',
-          cMapPacked: true,
-          standardFontDataUrl: '/pdfjs-dist/standard_fonts/',
-          wasmUrl: '/pdfjs-dist/wasm/',
-          enableXfa: true,
+          ...PDF_LOAD_OPTIONS,
         });
         const pdf = await loadingTask.promise;
         if (cancelled) return;
@@ -99,17 +96,25 @@ function ProspectusCard({ title, subtitle, pdfSrc, onClick, delay, colorClass })
         if (cancelled) return;
 
         const viewport = page.getViewport({ scale: 1 });
-        const scale = 400 / viewport.width;
+        const scale = 280 / viewport.width;
         const scaled = page.getViewport({ scale });
 
         const canvas = document.createElement('canvas');
         canvas.width = scaled.width;
         canvas.height = scaled.height;
-        const ctx = canvas.getContext('2d');
-        await page.render({ canvasContext: ctx, viewport: scaled }).promise;
+        const ctx = canvas.getContext('2d', { alpha: false });
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        await page.render({
+          canvasContext: ctx,
+          viewport: scaled,
+          background: 'rgb(255,255,255)',
+        }).promise;
         if (cancelled) return;
 
-        setThumbnailUrl(canvas.toDataURL('image/jpeg', 0.85));
+        setThumbnailUrl(canvas.toDataURL('image/jpeg', 0.72));
+        // Free worker memory — we only needed page 1 for the cover card
+        pdf.destroy?.();
       } catch (err) {
         console.error(`Failed to generate thumbnail for ${pdfSrc}:`, err);
       }

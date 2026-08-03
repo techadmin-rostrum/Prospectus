@@ -32,7 +32,8 @@ export function usePageRenderer() {
     if (!page || !canvas) return;
 
     const pageNum = page.pageNumber;
-    const dpr = window.devicePixelRatio || 1;
+    // Cap DPR — 3x phones waste CPU/bandwidth for little gain on first paint
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
 
     // Calculate the viewport scale to fit the page within the container
     const unscaledViewport = page.getViewport({ scale: 1 });
