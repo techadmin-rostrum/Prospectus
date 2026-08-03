@@ -32,14 +32,14 @@ export default function LoadingSkeleton({ progress = 0 }) {
 
       <div className="w-64 max-w-[80vw]">
         <div className="flex justify-between items-center mb-2">
-          <span className="text-sm text-slate-600 font-body">
+          <span className="text-sm text-white/70 font-body">
             Loading prospectus…
           </span>
-          <span className="text-sm text-slate-500 font-mono">
+          <span className="text-sm text-white/50 font-mono">
             {progress}%
           </span>
         </div>
-        <div className="h-1 bg-slate-200 rounded-full overflow-hidden">
+        <div className="h-1 bg-white/15 rounded-full overflow-hidden">
           <motion.div
             className="h-full rounded-full"
             style={{ background: 'linear-gradient(90deg, #CE1D47, #2F4DA4)' }}

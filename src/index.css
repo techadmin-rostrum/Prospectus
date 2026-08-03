@@ -67,11 +67,15 @@ html {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   overflow-x: hidden;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 
 body {
   min-height: 100vh;
   min-height: 100dvh;
+  overflow-x: hidden;
+  touch-action: manipulation;
 }
 
 #root {
@@ -105,23 +109,264 @@ body {
    Utility Classes
    =================================================================== */
 
-   /* Kill default black corner-drag hint & shadows */
-.stf__item .page-shadow,
-.stf__item .set-corner,
-.stf__item .stf__hardShadow,
-.stf__item .stf__hardInnerShadow,
-.stf__item .stf__outerShadow,
-.stf__item .stf__innerShadow {
+   /* Soften the default corner peeker; keep flip shadows for realism */
+.stf__item .set-corner {
   background: transparent !important;
   background-image: none !important;
   box-shadow: none !important;
 }
 
-/* Ensure the page + book container never show black underneath */
-.stf__page,
+.stf__outerShadow,
+.stf__innerShadow,
+.stf__hardShadow,
+.stf__hardInnerShadow {
+  pointer-events: none !important;
+  mix-blend-mode: normal;
+  opacity: 0.65;
+}
+
+/* Soft pages must stay in flat 2D so the curl clip-path works (not a hard fold) */
+.page-canvas--soft {
+  transform-style: flat;
+  background: #fff !important;
+}
+
+.page-canvas--hard {
+  transform-style: preserve-3d;
+  backface-visibility: hidden;
+  background: #fff !important;
+}
+
+/* Per-page crease — inner gutter shade on each leaf */
+.page-canvas--left::after,
+.page-canvas--right::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: min(14%, 56px);
+  pointer-events: none;
+  z-index: 2;
+}
+
+.page-canvas--left::after {
+  right: 0;
+  background: linear-gradient(
+    to left,
+    rgba(55, 45, 38, 0.1) 0%,
+    rgba(55, 45, 38, 0.045) 30%,
+    rgba(55, 45, 38, 0.015) 65%,
+    transparent 100%
+  );
+}
+
+.page-canvas--right::after {
+  left: 0;
+  background: linear-gradient(
+    to right,
+    rgba(55, 45, 38, 0.1) 0%,
+    rgba(55, 45, 38, 0.045) 30%,
+    rgba(55, 45, 38, 0.015) 65%,
+    transparent 100%
+  );
+}
+
+.page-canvas {
+  position: relative;
+  background: #fff !important;
+}
+
+/* Keep book flat for correct drag→flip hit testing */
+.flipbook-perspective {
+  transform-style: flat;
+}
+
+.flipbook-perspective--open {
+  perspective: none;
+}
+
+/*
+  Soft page turns use clip-path + 2D rotate.
+  backface-visibility / preserve-3d on soft items breaks that and makes
+  the page look like a sharp folded card instead of a turning sheet.
+*/
+.stf__item {
+  background-color: #fff !important;
+  opacity: 1 !important;
+}
+
+.stf__item canvas {
+  background-color: #fff !important;
+  opacity: 1 !important;
+}
+
+.stf__item.--soft {
+  background-color: #fff !important;
+  opacity: 1 !important;
+  -webkit-backface-visibility: visible;
+  backface-visibility: visible;
+  transform-style: flat;
+}
+
+.stf__item.--hard {
+  background-color: #fff !important;
+  opacity: 1 !important;
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+}
+
+.stf__item.--simple {
+  background-color: #fff !important;
+  opacity: 1 !important;
+}
+
+/* Ensure the page + book container never show black underneath.
+   Keep empty cover-leaf chrome transparent so opening never flashes a white gap. */
+.stf__page {
+  background-color: #fff !important;
+}
+
 .stf__block,
 .stf__parent {
-  background-color: #fff !important;
+  background-color: transparent !important;
+}
+
+.flipbook-stage {
+  position: relative;
+  will-change: width;
+  backface-visibility: hidden;
+  /* No filter here — filter was stripped on flip and made the bottom shadow vanish */
+  filter: none;
+}
+
+/* Persistent book lift shadow — stays visible while pages turn */
+.flipbook-stage::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  border-radius: 1px;
+  box-shadow:
+    0 22px 48px rgba(0, 0, 0, 0.28),
+    0 8px 18px rgba(0, 0, 0, 0.16),
+    0 2px 6px rgba(0, 0, 0, 0.1);
+}
+
+.flipbook-stage.is-flipping {
+  overflow: visible !important;
+}
+
+.flipbook-stage.is-flipping::before {
+  /* Keep the same shadow during the turn */
+  opacity: 1;
+  visibility: visible;
+}
+
+.flipbook-stage--cover {
+  overflow: hidden;
+  background: transparent;
+}
+
+.flipbook-stage--spread {
+  overflow: visible;
+  contain: none;
+}
+
+.flipbook-stage--cover .stf__parent,
+.flipbook-stage--cover .stf__block,
+.flipbook-stage--cover .stf__wrapper {
+  background-color: transparent !important;
+}
+
+.flipbook-stage .stf__wrapper,
+.flipbook-stage .stf__block,
+.flipbook-stage .stf__parent {
+  overflow: visible !important;
+}
+
+/* Spine / gutter overlays — above static pages; stay visible while turning */
+.book-depth {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 20;
+  transition: opacity 0.15s ease;
+}
+
+/* Keep fold under the turning leaf so the page never looks see-through */
+.flipbook-stage.is-flipping .book-depth {
+  opacity: 0;
+  visibility: hidden;
+}
+
+.book-depth__crease {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: min(11%, 64px);
+}
+
+.book-depth__crease--left {
+  right: 50%;
+  background: linear-gradient(
+    to left,
+    rgba(50, 40, 32, 0.12) 0%,
+    rgba(50, 40, 32, 0.05) 38%,
+    rgba(50, 40, 32, 0.015) 72%,
+    transparent 100%
+  );
+}
+
+.book-depth__crease--right {
+  left: 50%;
+  background: linear-gradient(
+    to right,
+    rgba(50, 40, 32, 0.12) 0%,
+    rgba(50, 40, 32, 0.05) 38%,
+    rgba(50, 40, 32, 0.015) 72%,
+    transparent 100%
+  );
+}
+
+.book-depth__spine {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+  transform: translateX(-50%);
+  border-radius: 1px;
+  background: linear-gradient(
+    180deg,
+    rgba(55, 45, 38, 0.04) 0%,
+    rgba(55, 45, 38, 0.16) 12%,
+    rgba(55, 45, 38, 0.2) 50%,
+    rgba(55, 45, 38, 0.16) 88%,
+    rgba(55, 45, 38, 0.04) 100%
+  );
+  box-shadow:
+    1px 0 0 rgba(255, 255, 255, 0.4),
+    -1px 0 0 rgba(55, 45, 38, 0.08);
+}
+
+/* Soft valley across the gutter for open-book depth */
+.book-depth__gutter {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: min(16%, 96px);
+  transform: translateX(-50%);
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(45, 36, 28, 0.03) 30%,
+    rgba(45, 36, 28, 0.07) 48%,
+    rgba(45, 36, 28, 0.07) 52%,
+    rgba(45, 36, 28, 0.03) 70%,
+    transparent 100%
+  );
 }
 
 .glass {
@@ -162,9 +407,13 @@ body {
   animation: shimmer 2s ease-in-out infinite;
 }
 
-/* Page flip shadow */
+/* Page elevation — only the stage drop-shadow; avoid a second hard floor band */
 .flip-shadow {
-  box-shadow: var(--shadow-book);
+  box-shadow: none !important;
+}
+
+.flip-shadow--cover {
+  box-shadow: none !important;
 }
 
 /* Book spine gradient */
@@ -194,6 +443,397 @@ body {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+}
+
+/* Flipbook shell — themed grainy stage + white Rostrum watermark */
+.flipbook-shell {
+  padding-top: max(0.65rem, env(safe-area-inset-top));
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+
+/* UG — reddish stage */
+.flipbook-shell--ug {
+  background:
+    radial-gradient(ellipse 70% 55% at 28% 22%, #c44a6a 0%, transparent 55%),
+    radial-gradient(ellipse 50% 45% at 78% 78%, #8a1a3a 0%, transparent 50%),
+    linear-gradient(165deg, #a01e3e 0%, #740d28 42%, #4a0818 100%);
+}
+
+.flipbook-shell--ug .flipbook-bg-glow {
+  background: radial-gradient(
+    ellipse 55% 45% at 32% 28%,
+    rgba(230, 120, 145, 0.35) 0%,
+    transparent 70%
+  );
+}
+
+.flipbook-shell--ug .flipbook-title-box {
+  background: rgba(140, 40, 60, 0.72);
+  border: 1px solid rgba(255, 220, 230, 0.2);
+  box-shadow:
+    0 10px 28px rgba(40, 0, 10, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+
+/* PG — bluish stage */
+.flipbook-shell--pg {
+  background:
+    radial-gradient(ellipse 70% 55% at 28% 22%, #4a6ec4 0%, transparent 55%),
+    radial-gradient(ellipse 50% 45% at 78% 78%, #2f4da4 0%, transparent 50%),
+    linear-gradient(165deg, #3a5cb0 0%, #243f8a 42%, #1a3270 100%);
+}
+
+.flipbook-shell--pg .flipbook-bg-glow {
+  background: radial-gradient(
+    ellipse 55% 45% at 32% 28%,
+    rgba(120, 155, 230, 0.4) 0%,
+    transparent 70%
+  );
+}
+
+.flipbook-shell--pg .flipbook-title-box {
+  background: rgba(55, 78, 140, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  box-shadow:
+    0 10px 28px rgba(0, 0, 0, 0.22),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+.flipbook-bg-glow {
+  position: absolute;
+  inset: 0;
+}
+
+.flipbook-bg-grain {
+  position: absolute;
+  inset: 0;
+  opacity: 0.4;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 180px 180px;
+}
+
+/* Full-screen watermark tiles — white @ 5% opacity, ~45° */
+.flipbook-watermark-grid {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 200vmax;
+  height: 200vmax;
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 2.25rem 3.5rem;
+  align-content: center;
+  justify-items: center;
+  opacity: 0.05;
+  color: #ffffff;
+  transform: translate(-50%, -50%) rotate(-45deg);
+}
+
+.flipbook-watermark {
+  font-size: clamp(1.75rem, 4.5vw, 3.25rem);
+  line-height: 1;
+  white-space: nowrap;
+  user-select: none;
+}
+
+/* Even chrome spacing: title ↔ book ↔ controls */
+.flipbook-chrome-header {
+  padding: 0.15rem 0.75rem 0.25rem;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.flipbook-chrome-footer {
+  box-sizing: border-box;
+  min-height: 3.75rem;
+  padding: 0.4rem 0.5rem max(0.65rem, env(safe-area-inset-bottom));
+  width: 100%;
+}
+
+@media (min-width: 640px) {
+  .flipbook-shell {
+    padding-top: max(1rem, env(safe-area-inset-top));
+  }
+
+  .flipbook-chrome-header {
+    padding: 0.25rem 1.25rem 0.35rem;
+  }
+
+  .flipbook-chrome-footer {
+    min-height: 4.5rem;
+    padding: 0.55rem 1rem max(1rem, env(safe-area-inset-bottom));
+  }
+}
+
+@media (min-width: 1024px) {
+  .flipbook-chrome-footer {
+    min-height: 5rem;
+    padding: 0.65rem 1rem 1.15rem;
+  }
+}
+
+/* Prospectus title chip — base; theme colors set above */
+.flipbook-title-box {
+  font-size: clamp(0.85rem, 2.6vw, 2.75rem);
+  line-height: 1.2;
+  padding: 0.3rem 0.75rem;
+  border-radius: 0.65rem;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  letter-spacing: -0.02em;
+  max-width: min(92vw, 42rem);
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (min-width: 640px) {
+  .flipbook-title-box {
+    padding: 0.35rem 1.15rem;
+    border-radius: 0.75rem;
+    white-space: normal;
+  }
+}
+
+.flipbook-controls-bar {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  gap: 0;
+  padding: 3px !important;
+  max-width: min(100%, calc(100vw - 1rem - env(safe-area-inset-left) - env(safe-area-inset-right)));
+}
+
+.flipbook-controls-bar::-webkit-scrollbar {
+  display: none;
+}
+
+.flipbook-controls-bar .flipbook-icon-btn {
+  padding: 7px;
+  min-width: 34px;
+  min-height: 34px;
+}
+
+.flipbook-controls-bar .flipbook-icon-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.flipbook-controls-bar .flipbook-page-form {
+  gap: 3px;
+  padding: 0 2px;
+}
+
+.flipbook-controls-bar .flipbook-page-input {
+  width: 36px;
+  padding: 4px 2px;
+  font-size: 12px;
+  border-radius: 6px;
+}
+
+.flipbook-controls-bar .flipbook-page-total {
+  font-size: 11px;
+}
+
+.flipbook-controls-bar .flipbook-divider {
+  width: 1px;
+  height: 18px;
+  margin: 0 2px;
+  flex-shrink: 0;
+  background: #e2e8f0;
+}
+
+/* Nav arrows — fluid size + safe-area aware */
+.flipbook-nav-arrow {
+  width: 2.5rem;
+  height: 2.5rem;
+  left: max(0.4rem, env(safe-area-inset-left));
+  right: auto;
+}
+
+.flipbook-nav-arrow--next {
+  left: auto;
+  right: max(0.4rem, env(safe-area-inset-right));
+}
+
+.flipbook-nav-arrow svg {
+  width: 1.1rem;
+  height: 1.1rem;
+}
+
+@media (min-width: 480px) {
+  .flipbook-controls-bar {
+    padding: 4px !important;
+  }
+
+  .flipbook-controls-bar .flipbook-icon-btn {
+    padding: 8px;
+    min-width: 36px;
+    min-height: 36px;
+  }
+
+  .flipbook-controls-bar .flipbook-icon-btn svg {
+    width: 17px;
+    height: 17px;
+  }
+
+  .flipbook-controls-bar .flipbook-page-input {
+    width: 40px;
+    font-size: 13px;
+  }
+
+  .flipbook-controls-bar .flipbook-page-total {
+    font-size: 12px;
+  }
+
+  .flipbook-nav-arrow {
+    width: 2.75rem;
+    height: 2.75rem;
+    left: max(0.6rem, env(safe-area-inset-left));
+  }
+
+  .flipbook-nav-arrow--next {
+    left: auto;
+    right: max(0.6rem, env(safe-area-inset-right));
+  }
+
+  .flipbook-nav-arrow svg {
+    width: 1.2rem;
+    height: 1.2rem;
+  }
+}
+
+@media (min-width: 640px) {
+  .flipbook-controls-bar {
+    padding: 5px !important;
+  }
+
+  .flipbook-controls-bar .flipbook-icon-btn {
+    padding: 10px;
+    min-width: 40px;
+    min-height: 40px;
+  }
+
+  .flipbook-controls-bar .flipbook-icon-btn svg {
+    width: 19px;
+    height: 19px;
+  }
+
+  .flipbook-controls-bar .flipbook-page-form {
+    gap: 6px;
+    padding: 0 4px;
+  }
+
+  .flipbook-controls-bar .flipbook-page-input {
+    width: 44px;
+    padding: 6px 6px;
+    font-size: 14px;
+  }
+
+  .flipbook-controls-bar .flipbook-page-total {
+    font-size: 13px;
+  }
+
+  .flipbook-controls-bar .flipbook-divider {
+    height: 24px;
+    margin: 0 4px;
+  }
+
+  .flipbook-nav-arrow {
+    width: 3.25rem;
+    height: 3.25rem;
+    left: max(1rem, env(safe-area-inset-left));
+  }
+
+  .flipbook-nav-arrow--next {
+    left: auto;
+    right: max(1rem, env(safe-area-inset-right));
+  }
+
+  .flipbook-nav-arrow svg {
+    width: 1.35rem;
+    height: 1.35rem;
+  }
+}
+
+@media (min-width: 768px) {
+  .flipbook-controls-bar {
+    padding: 6px !important;
+  }
+
+  .flipbook-controls-bar .flipbook-icon-btn {
+    padding: 12px;
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .flipbook-controls-bar .flipbook-icon-btn svg {
+    width: 22px;
+    height: 22px;
+  }
+
+  .flipbook-controls-bar .flipbook-page-input {
+    width: 48px;
+    padding: 6px 8px;
+  }
+
+  .flipbook-controls-bar .flipbook-page-total {
+    font-size: 14px;
+  }
+
+  .flipbook-controls-bar .flipbook-divider {
+    height: 28px;
+    margin: 0 6px;
+  }
+
+  .flipbook-nav-arrow {
+    width: 3.5rem;
+    height: 3.5rem;
+    left: max(1.5rem, env(safe-area-inset-left));
+  }
+
+  .flipbook-nav-arrow--next {
+    left: auto;
+    right: max(1.5rem, env(safe-area-inset-right));
+  }
+
+  .flipbook-nav-arrow svg {
+    width: 1.5rem;
+    height: 1.5rem;
+  }
+}
+
+@media (min-width: 1024px) {
+  .flipbook-nav-arrow {
+    width: 4rem;
+    height: 4rem;
+    left: max(2.5rem, env(safe-area-inset-left));
+  }
+
+  .flipbook-nav-arrow--next {
+    left: auto;
+    right: max(2.5rem, env(safe-area-inset-right));
+  }
+
+  .flipbook-nav-arrow svg {
+    width: 1.65rem;
+    height: 1.65rem;
+  }
+}
+
+@media (min-width: 1280px) {
+  .flipbook-nav-arrow {
+    left: max(2.75rem, env(safe-area-inset-left));
+  }
+
+  .flipbook-nav-arrow--next {
+    left: auto;
+    right: max(2.75rem, env(safe-area-inset-right));
   }
 }
 
@@ -230,11 +870,10 @@ body {
 }
 
 .stf__item {
-  z-index: 10;
+  background-color: #fff !important;
 }
 
-/* The actively curling page needs the highest stacking during a flip */
-.stf__item.--simple,
-.stf__item.--soft {
-  z-index: 20;
+/* Let the library control z-index during flips — don't force soft pages above everything */
+.stf__item.--simple {
+  background-color: #fff !important;
 }

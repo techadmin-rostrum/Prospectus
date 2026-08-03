@@ -2,12 +2,22 @@ import React, { useRef, useEffect, memo } from 'react';
 import { usePageRenderer } from '../hooks/usePageRenderer';
 
 const PageCanvas = React.forwardRef(function PageCanvas(
-  { pageNum, pdfDocument, width, height, extraScale = 1, priority = false, shouldRender = true },
+  {
+    pageNum,
+    numPages = 0,
+    pdfDocument,
+    width,
+    height,
+    extraScale = 1,
+    priority = false,
+    shouldRender = true,
+  },
   ref
 ) {
   const canvasRef = useRef(null);
   const { renderPageToCanvas } = usePageRenderer();
   const renderTaskRef = useRef(null);
+  const isHardCover = pageNum === 1 || (numPages > 0 && pageNum === numPages);
 
   useEffect(() => {
     if (!pdfDocument || !canvasRef.current || !width || !height || !shouldRender) return;
@@ -37,17 +47,29 @@ const PageCanvas = React.forwardRef(function PageCanvas(
         clearTimeout(renderTaskRef.current);
       }
     };
-  }, [pdfDocument, pageNum, width, height, extraScale, renderPageToCanvas, priority]);
+  }, [pdfDocument, pageNum, width, height, extraScale, renderPageToCanvas, priority, shouldRender]);
+
+  // With showCover: page 1 = cover; then even = left leaf, odd = right leaf
+  const isLeftPage = pageNum > 1 && pageNum % 2 === 0;
+  const isRightPage = pageNum > 1 && pageNum % 2 === 1;
+  const sideClass = isLeftPage
+    ? 'page-canvas--left'
+    : isRightPage
+      ? 'page-canvas--right'
+      : '';
 
   return (
     <div
       ref={ref}
-      className="page-canvas"
+      className={`page-canvas ${isHardCover ? 'page-canvas--hard' : 'page-canvas--soft'} ${sideClass}`.trim()}
+      data-density={isHardCover ? 'hard' : 'soft'}
+      data-page={pageNum}
       style={{
         width: `${width}px`,
         height: `${height}px`,
         overflow: 'hidden',
-        background: '#fff',
+        background: '#ffffff',
+        isolation: 'isolate',
       }}
     >
       <canvas
@@ -56,6 +78,7 @@ const PageCanvas = React.forwardRef(function PageCanvas(
           display: 'block',
           width: `${width}px`,
           height: `${height}px`,
+          background: '#ffffff',
         }}
       />
     </div>

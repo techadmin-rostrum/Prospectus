@@ -2,20 +2,18 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 
 /**
  * Hook for page-turn sound effect using Web Audio API.
- * 
- * Generates a subtle paper-rustling sound programmatically
- * (no external audio file needed). Can be muted/unmuted.
- * Respects prefers-reduced-motion.
+ *
+ * Generates a paper-rustle that tracks a full page turn.
+ * Can be muted/unmuted. Respects prefers-reduced-motion.
  */
 export function useSound() {
-  const [isMuted, setIsMuted] = useState(true); // Start muted by default
+  const [isMuted, setIsMuted] = useState(true);
   const audioCtxRef = useRef(null);
   const prefersReducedMotion = useRef(
     typeof window !== 'undefined' &&
     window.matchMedia('(prefers-reduced-motion: reduce)').matches
   );
 
-  // Initialize AudioContext lazily (requires user gesture)
   const getAudioContext = useCallback(() => {
     if (!audioCtxRef.current) {
       audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
@@ -24,8 +22,7 @@ export function useSound() {
   }, []);
 
   /**
-   * Play a subtle page-turn sound effect.
-   * Synthesized using filtered noise — sounds like paper rustling.
+   * Play a page-turn rustle timed to span most of the flip animation.
    */
   const playPageTurn = useCallback(() => {
     if (isMuted || prefersReducedMotion.current) return;
@@ -36,35 +33,50 @@ export function useSound() {
         ctx.resume();
       }
 
-      const duration = 0.25;
+      // Match interior flip duration (~900ms) so sound rides with the turn
+      const duration = 0.85;
       const now = ctx.currentTime;
 
-      // Create noise buffer (white noise filtered to sound like paper)
-      const bufferSize = ctx.sampleRate * duration;
+      const bufferSize = Math.floor(ctx.sampleRate * duration);
       const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
       const data = buffer.getChannelData(0);
 
+      let last = 0;
       for (let i = 0; i < bufferSize; i++) {
-        data[i] = (Math.random() * 2 - 1) * 0.3;
+        const t = i / bufferSize;
+        // Brown-ish noise (smoother than white) for paper texture
+        const white = Math.random() * 2 - 1;
+        last = (last + 0.02 * white) / 1.02;
+        // Louder in the middle of the turn, softer at start/end
+        const envelope = Math.sin(Math.PI * t);
+        data[i] = last * 3.2 * envelope;
       }
 
       const source = ctx.createBufferSource();
       source.buffer = buffer;
 
-      // Bandpass filter to shape it like paper
-      const filter = ctx.createBiquadFilter();
-      filter.type = 'bandpass';
-      filter.frequency.value = 3000;
-      filter.Q.value = 0.5;
+      const band = ctx.createBiquadFilter();
+      band.type = 'bandpass';
+      band.frequency.setValueAtTime(1200, now);
+      band.frequency.exponentialRampToValueAtTime(2800, now + 0.22);
+      band.frequency.exponentialRampToValueAtTime(1600, now + duration);
+      band.Q.value = 0.55;
 
-      // Envelope — quick attack, fast decay
+      const high = ctx.createBiquadFilter();
+      high.type = 'highshelf';
+      high.frequency.value = 4000;
+      high.gain.value = -6;
+
       const gainNode = ctx.createGain();
       gainNode.gain.setValueAtTime(0, now);
-      gainNode.gain.linearRampToValueAtTime(0.08, now + 0.02);
+      gainNode.gain.linearRampToValueAtTime(0.055, now + 0.05);
+      gainNode.gain.linearRampToValueAtTime(0.07, now + 0.28);
+      gainNode.gain.linearRampToValueAtTime(0.035, now + 0.55);
       gainNode.gain.exponentialRampToValueAtTime(0.001, now + duration);
 
-      source.connect(filter);
-      filter.connect(gainNode);
+      source.connect(band);
+      band.connect(high);
+      high.connect(gainNode);
       gainNode.connect(ctx.destination);
 
       source.start(now);
@@ -78,7 +90,6 @@ export function useSound() {
     setIsMuted(prev => !prev);
   }, []);
 
-  // Cleanup audio context on unmount
   useEffect(() => {
     return () => {
       if (audioCtxRef.current) {

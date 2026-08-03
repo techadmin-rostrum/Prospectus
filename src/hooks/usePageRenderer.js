@@ -75,10 +75,13 @@ export function usePageRenderer() {
         tempCanvas.width = viewport.width;
         tempCanvas.height = viewport.height;
         const ctx = tempCanvas.getContext('2d', { alpha: false });
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
 
         await page.render({
           canvasContext: ctx,
           viewport,
+          background: 'rgb(255,255,255)',
         }).promise;
 
         let bitmap = null;

@@ -13,7 +13,8 @@ export default function App() {
           element={
             <Flipbook 
               pdfSrc="/pdfs/UG26.pdf" 
-              title="Undergraduate Prospectus 2026" 
+              title="Undergraduate Prospectus 2026"
+              theme="ug"
             />
           } 
         />
@@ -23,7 +24,8 @@ export default function App() {
           element={
             <Flipbook 
               pdfSrc="/pdfs/PG26.pdf" 
-              title="Postgraduate Prospectus 2026" 
+              title="Postgraduate Prospectus 2026"
+              theme="pg"
             />
           } 
         />
