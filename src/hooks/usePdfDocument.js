@@ -54,8 +54,11 @@ export function usePdfDocument(pdfSrc) {
 
         // Track download progress
         loadingTask.onProgress = ({ loaded, total }) => {
-          if (total > 0 && !cancelled) {
+          if (!cancelled && total > 0) {
             setProgress(Math.round((loaded / total) * 100));
+          } else if (!cancelled && loaded > 0) {
+            // Some hosts omit Content-Length — show indeterminate progress
+            setProgress((prev) => (prev < 90 ? Math.max(prev, 10) : prev));
           }
         };
 
