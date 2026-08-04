@@ -153,6 +153,10 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
     // Only treat real turns as "flipping" for shadow/filter (not corner hover)
     setIsFlipping(e.data === 'flipping' || e.data === 'user_fold');
 
+    // Un-clip the book area for the whole turn (incl. corner folds) via a DOM
+    // class — setState here would re-render the book mid-fold.
+    mainRef.current?.classList.toggle('is-turning', e.data !== 'read');
+
     // Soft flips clone the page DOM without canvas pixels — copy them now.
     if (turning) {
       syncFlipCanvases();
@@ -313,14 +317,42 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
         initial={{ opacity: 0, y: -12 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
-        className="flipbook-chrome-header flex-shrink-0 flex justify-center items-center z-20 pointer-events-auto relative"
+        className="flipbook-chrome-header flex-shrink-0 z-20 pointer-events-auto relative"
       >
-        <h1 className="flipbook-title-box font-display font-medium text-white">
+        <a
+          href="https://rostrumedu.com/"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flipbook-brand-link"
+          aria-label="Rostrum Education — visit website"
+        >
+          <img src="/Logo.svg" alt="Rostrum Education" className="flipbook-brand-logo" />
+        </a>
+
+        <div className="flipbook-title-box font-display font-medium text-white">
           {title}
-        </h1>
+        </div>
+
+        <a
+          href="https://rostrumedu.com/contact-us/"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flipbook-contact-btn font-body"
+        >
+          Contact Us
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path
+              d="M5 12h14M13 6l6 6-6 6"
+              stroke="currentColor"
+              strokeWidth="2.2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </a>
       </motion.header>
 
-      <main ref={mainRef} className="flex-1 min-h-0 flex items-center justify-center relative z-10 overflow-hidden px-1 sm:px-2">
+      <main ref={mainRef} className="flipbook-main flex-1 min-h-0 flex items-center justify-center relative z-10 px-1 sm:px-2">
         {loading || !dimensions.width ? (
           <LoadingSkeleton progress={progress} />
         ) : (

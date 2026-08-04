@@ -231,6 +231,17 @@ body {
   background-color: transparent !important;
 }
 
+/* Book area: clipped at rest so pan/zoom stays contained, open while turning
+   so the curling leaf and its shadow aren't cut off at the edges. */
+.flipbook-main {
+  overflow: hidden;
+}
+
+.flipbook-main.is-turning {
+  overflow: visible;
+  z-index: 30;
+}
+
 .flipbook-stage {
   position: relative;
   will-change: width;
@@ -268,9 +279,44 @@ body {
   background: transparent;
 }
 
+.flipbook-stage--cover.is-flipping {
+  overflow: visible !important;
+}
+
 .flipbook-stage--spread {
   overflow: visible;
   contain: none;
+}
+
+.flipbook-main {
+  /* Always visible so soft corner peeks aren't clipped; full turns still
+     open the shell via .is-page-turning without hover layout thrash. */
+  overflow: visible;
+}
+
+/* While turning: let the curl escape shell + avoid html overflow-x clipping */
+html.flipbook-turning,
+body.flipbook-turning {
+  overflow: visible !important;
+}
+
+.flipbook-shell.is-page-turning {
+  overflow: visible;
+}
+
+.flipbook-main.is-page-turning {
+  z-index: 40;
+}
+
+.flipbook-shell.is-page-turning .flipbook-chrome-header,
+.flipbook-shell.is-page-turning .flipbook-chrome-footer {
+  z-index: 15;
+  pointer-events: none;
+}
+
+.flipbook-shell.is-page-turning .flipbook-chrome-header a,
+.flipbook-shell.is-page-turning .flipbook-chrome-footer * {
+  pointer-events: auto;
 }
 
 .flipbook-stage--cover .stf__parent,
@@ -540,11 +586,93 @@ body {
   user-select: none;
 }
 
-/* Even chrome spacing: title ↔ book ↔ controls */
+/* Even chrome spacing: logo · title · contact ↔ book ↔ controls */
 .flipbook-chrome-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.5rem 0.75rem;
   padding: 0.15rem 0.75rem 0.25rem;
   width: 100%;
   box-sizing: border-box;
+}
+
+.flipbook-chrome-header .flipbook-brand-link {
+  justify-self: start;
+}
+
+.flipbook-chrome-header .flipbook-title-box {
+  justify-self: center;
+  grid-column: 2;
+  max-width: none;
+  white-space: nowrap;
+  transform: translateY(1.5rem);
+}
+
+.flipbook-chrome-header .flipbook-contact-btn {
+  justify-self: end;
+}
+
+.flipbook-brand-link {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.4rem 0.7rem;
+  border-radius: 0.65rem;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.2);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.flipbook-brand-link:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.26);
+}
+
+.flipbook-brand-logo {
+  display: block;
+  height: 2rem;
+  width: auto;
+}
+
+.flipbook-contact-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  white-space: nowrap;
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 0.55rem 1.05rem;
+  border-radius: 999px;
+  color: #fff;
+  background: linear-gradient(135deg, #ce1d47 0%, #a01e3e 55%, #740d28 100%);
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  box-shadow:
+    0 8px 20px rgba(80, 0, 20, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22);
+  transition: transform 0.2s ease, box-shadow 0.2s ease, filter 0.2s ease;
+}
+
+.flipbook-contact-btn:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.08);
+  box-shadow:
+    0 10px 26px rgba(80, 0, 20, 0.42),
+    inset 0 1px 0 rgba(255, 255, 255, 0.28);
+}
+
+.flipbook-shell--pg .flipbook-contact-btn {
+  background: linear-gradient(135deg, #4a6ec4 0%, #2f4da4 55%, #1a3270 100%);
+  box-shadow:
+    0 8px 20px rgba(10, 25, 70, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22);
+}
+
+.flipbook-shell--pg .flipbook-contact-btn:hover {
+  box-shadow:
+    0 10px 26px rgba(10, 25, 70, 0.48),
+    inset 0 1px 0 rgba(255, 255, 255, 0.28);
 }
 
 .flipbook-chrome-footer {
@@ -560,7 +688,22 @@ body {
   }
 
   .flipbook-chrome-header {
-    padding: 0.25rem 1.25rem 0.35rem;
+    padding: 0.35rem 1.25rem 0.45rem;
+    gap: 0.75rem 1.25rem;
+  }
+
+  .flipbook-brand-logo {
+    height: 2.5rem;
+  }
+
+  .flipbook-brand-link {
+    padding: 0.45rem 0.85rem;
+    border-radius: 0.75rem;
+  }
+
+  .flipbook-contact-btn {
+    font-size: 0.9rem;
+    padding: 0.65rem 1.35rem;
   }
 
   .flipbook-chrome-footer {
@@ -578,14 +721,13 @@ body {
 
 /* Prospectus title chip — base; theme colors set above */
 .flipbook-title-box {
-  font-size: clamp(0.85rem, 2.6vw, 2.75rem);
-  line-height: 1.2;
-  padding: 0.3rem 0.75rem;
+  font-size: clamp(1.15rem, 3.2vw, 3rem);
+  line-height: 1.15;
+  padding: 0.4rem 1rem;
   border-radius: 0.65rem;
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   letter-spacing: -0.02em;
-  max-width: min(92vw, 42rem);
   text-align: center;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -594,9 +736,12 @@ body {
 
 @media (min-width: 640px) {
   .flipbook-title-box {
-    padding: 0.35rem 1.15rem;
+    padding: 0.45rem 1.25rem;
     border-radius: 0.75rem;
-    white-space: normal;
+  }
+
+  .flipbook-chrome-header .flipbook-title-box {
+    transform: translateY(1.75rem);
   }
 }
 
