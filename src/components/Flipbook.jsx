@@ -21,6 +21,7 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
   const bookRef = useRef(null);
   const mainRef = useRef(null);
   const bookStageRef = useRef(null);
+  const mainStageRef = useRef(null);
 
   const { pdfDocument, numPages, loading, progress, error, aspectRatio } = usePdfDocument(pdfSrc);
   const { evictCache, clearCache } = usePageRenderer();
@@ -54,13 +55,17 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
       const mobile = width < 768;
       setIsMobile(mobile);
 
-      const container = mainRef.current;
+      // On mobile the title sits above the book — size from the stage under it
+      // so the page fills that area instead of centering in leftover space.
+      const container = (mobile && mainStageRef.current) || mainRef.current;
       if (!container) return;
 
       const rect = container.getBoundingClientRect();
       // Leave room for side arrows on larger screens; tighter on phones
       const sideGutter = mobile ? 12 : width < 1024 ? 88 : 120;
-      const verticalGutter = mobile ? 8 : 24;
+      // Mobile title sits above the book inside the stage — reserve space for it
+      const titleReserve = mobile && width < 640 ? 44 : 0;
+      const verticalGutter = mobile ? 4 + titleReserve : 24;
       const availableWidth = Math.max(rect.width - sideGutter, 0);
       const availableHeight = Math.max(rect.height - verticalGutter, 0);
 
@@ -102,6 +107,7 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
 
     const observer = new ResizeObserver(handleResize);
     if (mainRef.current) observer.observe(mainRef.current);
+    if (mainStageRef.current) observer.observe(mainStageRef.current);
 
     return () => {
       window.removeEventListener('resize', handleResize);
@@ -295,6 +301,11 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
   // Front cover = right leaf; back cover = left leaf. Crop to one page and center it.
   const singleCentered = !isMobile && (isCoverView || isBackCoverView);
   const singlePageOffsetX = !isMobile && isCoverView ? -pageW : 0;
+  // Closed book: one leaf on screen, so the stage can carry spine + page-stack depth
+  const isBookClosed = (isCoverView || isBackCoverView) && !isFlipping;
+  const closedClass = isBookClosed
+    ? ` flipbook-stage--closed flipbook-stage--closed-${isCoverView ? 'front' : 'back'}`
+    : '';
 
   return (
     <div className={`flipbook-shell flipbook-shell--${theme} h-dvh max-h-dvh flex flex-col relative overflow-hidden`}>
@@ -304,12 +315,24 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
       >
         <div className="flipbook-bg-glow" />
         <div className="flipbook-bg-grain" />
-        <div className="flipbook-watermark-grid">
-          {Array.from({ length: 120 }, (_, i) => (
-            <span key={i} className="flipbook-watermark font-display font-medium tracking-tight">
-              Rostrum
-            </span>
-          ))}
+        <div className="flipbook-watermark-field">
+          {Array.from({ length: 5 }, (_, col) => {
+            const words = Array.from({ length: 28 }, () => 'Rostrum');
+            return (
+              <div
+                key={col}
+                className={`flipbook-watermark-col${col % 2 === 1 ? ' is-reverse' : ''}`}
+              >
+                <div className="flipbook-watermark-col-track">
+                  {[...words, ...words].map((word, i) => (
+                    <span key={i} className="flipbook-watermark font-display font-medium tracking-tight">
+                      {word}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
 
@@ -329,7 +352,7 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
           <img src="/Logo.svg" alt="Rostrum Education" className="flipbook-brand-logo" />
         </a>
 
-        <div className="flipbook-title-box font-display font-medium text-white">
+        <div className="flipbook-title-box flipbook-title--desktop font-display font-medium text-white">
           {title}
         </div>
 
@@ -352,20 +375,30 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
         </a>
       </motion.header>
 
-      <main ref={mainRef} className="flipbook-main flex-1 min-h-0 flex items-center justify-center relative z-10 px-1 sm:px-2">
+      <main ref={mainRef} className="flipbook-main flex-1 min-h-0 flex flex-col items-center relative z-10 px-1 sm:px-2">
+        <div ref={mainStageRef} className="flipbook-main-stage flex-1 min-h-0 w-full flex items-center justify-center">
         {loading || !dimensions.width ? (
-          <LoadingSkeleton progress={progress} />
+          <div className="flipbook-stage-cluster">
+            <div className="flipbook-title-box flipbook-title--mobile font-display font-medium text-white">
+              {title}
+            </div>
+            <LoadingSkeleton progress={progress} />
+          </div>
         ) : (
           <motion.div
             initial={{ opacity: 0, scale: 0.92, y: 30 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             transition={{ duration: 0.7, ease: [0.16, 1, 0.3, 1] }}
-            className="w-full h-full flex justify-center items-center relative z-10 overflow-visible"
+            className="flipbook-book-wrap w-full h-full flex justify-center items-center relative z-10 overflow-visible"
             onMouseDown={handleMouseDown}
             onMouseMove={handleMouseMove}
             onMouseUp={handleMouseUp}
             onMouseLeave={handleMouseUp}
           >
+            <div className="flipbook-stage-cluster">
+              <div className="flipbook-title-box flipbook-title--mobile font-display font-medium text-white">
+                {title}
+              </div>
             <div
               className="overflow-visible"
               style={{
@@ -396,10 +429,16 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
                 }}
                 className={
                   singleCentered
-                    ? 'flipbook-stage flipbook-stage--cover'
-                    : `flipbook-stage flipbook-stage--spread${isFlipping ? ' is-flipping' : ''}`
+                    ? `flipbook-stage flipbook-stage--cover${closedClass}`
+                    : `flipbook-stage flipbook-stage--spread${isFlipping ? ' is-flipping' : ''}${closedClass}`
                 }
               >
+                {isBookClosed && (
+                  <div className="book-cover-depth" aria-hidden="true">
+                    <div className="book-cover-depth__spine" />
+                    <div className="book-cover-depth__sheen" />
+                  </div>
+                )}
                 <motion.div
                   initial={false}
                   animate={{
@@ -491,8 +530,10 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
               </motion.div>
               </div>
             </div>
+            </div>
           </motion.div>
         )}
+        </div>
       </main>
 
       <footer className="flipbook-chrome-footer flex-shrink-0 relative z-30 flex justify-center items-center">

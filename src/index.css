@@ -55,7 +55,7 @@
    =================================================================== */
 
 * {
-  margin: 0;
+
   padding: 0;
   box-sizing: border-box;
 }
@@ -286,6 +286,83 @@ body {
 .flipbook-stage--spread {
   overflow: visible;
   contain: none;
+}
+
+/* ---------------------------------------------------------------
+   Closed book (front / back cover)
+   A single flat leaf reads as a poster, so add the book block:
+   fanned page edges past the fore-edge, a spine roll, and a lift.
+   The shadow lives on the stage itself — its own overflow:hidden
+   crop (used to hide the facing leaf) would clip a pseudo-element.
+   --------------------------------------------------------------- */
+.flipbook-stage--closed {
+  border-radius: 1px 3px 3px 1px;
+}
+
+.flipbook-stage--closed-front {
+  box-shadow:
+    3px 0 0 -1px rgba(252, 250, 246, 0.98),
+
+    0 34px 60px rgba(0, 0, 0, 0.42),
+    0 14px 26px rgba(0, 0, 0, 0.26),
+    0 4px 9px rgba(0, 0, 0, 0.18);
+}
+
+.flipbook-stage--closed-back {
+  border-radius: 3px 1px 1px 3px;
+  box-shadow:
+    -3px 0 0 -1px rgba(252, 250, 246, 0.98),
+  
+    0 34px 60px rgba(0, 0, 0, 0.42),
+    0 14px 26px rgba(0, 0, 0, 0.26),
+    0 4px 9px rgba(0, 0, 0, 0.18);
+}
+
+.book-cover-depth {
+  position: absolute;
+  inset: 0;
+  z-index: 25;
+  pointer-events: none;
+  border-radius: inherit;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.07),
+    inset -2px 0 5px -2px rgba(0, 0, 0, 0.3),
+    inset 0 -2px 5px -2px rgba(0, 0, 0, 0.22);
+}
+
+.flipbook-stage--closed-back .book-cover-depth {
+  transform: scaleX(-1);
+}
+
+/* Rolled spine along the bound edge */
+.book-cover-depth__spine {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: clamp(7px, 2.4%, 20px);
+  background: linear-gradient(
+    90deg,
+    rgba(0, 0, 0, 0.42) 0%,
+    rgba(0, 0, 0, 0.26) 20%,
+    rgba(0, 0, 0, 0.08) 42%,
+    rgba(255, 255, 255, 0.12) 62%,
+    rgba(0, 0, 0, 0.09) 82%,
+    transparent 100%
+  );
+}
+
+/* Faint gloss so the cover catches light instead of sitting flat */
+.book-cover-depth__sheen {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    114deg,
+    rgba(255, 255, 255, 0.13) 0%,
+    rgba(255, 255, 255, 0.05) 24%,
+    rgba(255, 255, 255, 0) 46%,
+    rgba(0, 0, 0, 0.05) 100%
+  );
 }
 
 .flipbook-main {
@@ -562,21 +639,38 @@ body.flipbook-turning {
   background-size: 180px 180px;
 }
 
-/* Full-screen watermark tiles — white @ 5% opacity, ~45° */
-.flipbook-watermark-grid {
+/* 5 tilted columns of "Rostrum" — same motion as landing, themed shell colors stay */
+.flipbook-watermark-field {
   position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 200vmax;
-  height: 200vmax;
-  display: grid;
-  grid-template-columns: repeat(8, 1fr);
-  gap: 2.25rem 3.5rem;
-  align-content: center;
-  justify-items: center;
-  opacity: 0.05;
+  inset: -25%;
+  display: flex;
+  justify-content: space-evenly;
+  align-items: center;
+  opacity: 0.055;
   color: #ffffff;
-  transform: translate(-50%, -50%) rotate(-45deg);
+  pointer-events: none;
+}
+
+.flipbook-watermark-col {
+  flex: 0 0 auto;
+  height: 160%;
+  overflow: hidden;
+  transform: rotate(-45deg);
+}
+
+.flipbook-watermark-col-track {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2.75rem;
+  width: max-content;
+  animation: landing-watermark-scroll-y 42s linear infinite;
+  will-change: transform;
+}
+
+.flipbook-watermark-col.is-reverse .flipbook-watermark-col-track {
+  animation-direction: reverse;
+  animation-duration: 50s;
 }
 
 .flipbook-watermark {
@@ -584,6 +678,13 @@ body.flipbook-turning {
   line-height: 1;
   white-space: nowrap;
   user-select: none;
+  flex-shrink: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .flipbook-watermark-col-track {
+    animation: none;
+  }
 }
 
 /* Even chrome spacing: logo · title · contact ↔ book ↔ controls */
@@ -606,11 +707,16 @@ body.flipbook-turning {
   grid-column: 2;
   max-width: none;
   white-space: nowrap;
-  transform: translateY(1.5rem);
+  transform: none;
 }
 
 .flipbook-chrome-header .flipbook-contact-btn {
   justify-self: end;
+}
+
+/* Mobile book caption — hidden on desktop */
+.flipbook-title--mobile {
+  display: none;
 }
 
 .flipbook-brand-link {
@@ -682,13 +788,100 @@ body.flipbook-turning {
   width: 100%;
 }
 
+/* Mobile / narrow: logo + contact only in chrome; title sits above the book */
+@media (max-width: 639px) {
+  .flipbook-chrome-header {
+    grid-template-columns: 1fr auto;
+    grid-template-rows: auto;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.35rem max(0.55rem, env(safe-area-inset-right)) 0.25rem max(0.55rem, env(safe-area-inset-left));
+  }
+
+  .flipbook-chrome-header .flipbook-brand-link {
+    grid-column: 1;
+    grid-row: 1;
+    justify-self: start;
+    padding: 0.28rem 0.45rem;
+    border-radius: 0.5rem;
+  }
+
+  .flipbook-chrome-header .flipbook-brand-logo {
+    height: 1.35rem;
+  }
+
+  .flipbook-chrome-header .flipbook-contact-btn {
+    grid-column: 2;
+    grid-row: 1;
+    justify-self: end;
+    font-size: 0.7rem;
+    padding: 0.4rem 0.7rem;
+    gap: 0.25rem;
+  }
+
+  .flipbook-chrome-header .flipbook-contact-btn svg {
+    width: 11px;
+    height: 11px;
+  }
+
+  .flipbook-title--desktop {
+    display: none;
+  }
+
+  .flipbook-title--mobile {
+    display: block;
+    width: fit-content;
+    max-width: min(100%, 22rem);
+    margin: 0 auto 0.45rem;
+    transform: none;
+    font-size: clamp(0.78rem, 3.6vw, 0.98rem);
+    padding: 0.32rem 0.7rem;
+    border-radius: 0.55rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    z-index: 12;
+  }
+
+  .flipbook-main {
+    justify-content: center;
+  }
+
+  .flipbook-main-stage {
+    align-items: center;
+    justify-content: center;
+    padding-top: 0;
+  }
+
+  .flipbook-book-wrap {
+    align-items: center !important;
+    height: 100%;
+  }
+
+  /* Title + book move together, centered as one block */
+  .flipbook-stage-cluster {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    max-width: 100%;
+  }
+}
+
 @media (min-width: 640px) {
+  .flipbook-title--mobile {
+    display: none;
+  }
+
+  .flipbook-title--desktop {
+    display: block;
+  }
+
   .flipbook-shell {
     padding-top: max(1rem, env(safe-area-inset-top));
   }
 
   .flipbook-chrome-header {
-    padding: 0.35rem 1.25rem 0.45rem;
+    padding: 0.35rem 1.25rem 0.65rem;
     gap: 0.75rem 1.25rem;
   }
 
@@ -709,6 +902,34 @@ body.flipbook-turning {
   .flipbook-chrome-footer {
     min-height: 4.5rem;
     padding: 0.55rem 1rem max(1rem, env(safe-area-inset-bottom));
+  }
+}
+
+/* Tight tablet: keep one row but shrink so title doesn't collide */
+@media (min-width: 640px) and (max-width: 900px) {
+  .flipbook-chrome-header {
+    gap: 0.5rem 0.65rem;
+    padding: 0.3rem 0.85rem 0.4rem;
+  }
+
+  .flipbook-brand-logo {
+    height: 1.85rem;
+  }
+
+  .flipbook-brand-link {
+    padding: 0.35rem 0.6rem;
+  }
+
+  .flipbook-contact-btn {
+    font-size: 0.78rem;
+    padding: 0.5rem 0.9rem;
+  }
+
+  .flipbook-chrome-header .flipbook-title-box {
+    transform: none;
+    font-size: clamp(0.95rem, 2.4vw, 1.45rem);
+    max-width: min(46vw, 22rem);
+    padding: 0.4rem 0.85rem;
   }
 }
 
@@ -734,14 +955,14 @@ body.flipbook-turning {
   white-space: nowrap;
 }
 
-@media (min-width: 640px) {
+@media (min-width: 901px) {
   .flipbook-title-box {
     padding: 0.45rem 1.25rem;
     border-radius: 0.75rem;
   }
 
   .flipbook-chrome-header .flipbook-title-box {
-    transform: translateY(1.75rem);
+    transform: none;
   }
 }
 
@@ -1021,4 +1242,314 @@ body.flipbook-turning {
 /* Let the library control z-index during flips — don't force soft pages above everything */
 .stf__item.--simple {
   background-color: #fff !important;
+}
+
+/* ===================================================================
+   Landing page
+   =================================================================== */
+
+.landing-page {
+  background:
+    radial-gradient(ellipse 70% 55% at 28% 22%, #4a6ec4 0%, transparent 55%),
+    radial-gradient(ellipse 50% 45% at 78% 78%, #2f4da4 0%, transparent 50%),
+    linear-gradient(165deg, #3a5cb0 0%, #243f8a 42%, #1a3270 100%);
+  /* Clear logo + Contact Us, but keep mobile compact */
+  padding-top: max(4.75rem, calc(env(safe-area-inset-top) + 3.75rem));
+}
+
+@media (min-width: 640px) {
+  .landing-page {
+    padding-top: max(5.5rem, calc(env(safe-area-inset-top) + 4.25rem));
+  }
+}
+
+@media (min-width: 768px) {
+  .landing-page {
+    padding-top: max(5.75rem, calc(env(safe-area-inset-top) + 4.5rem));
+  }
+}
+
+.landing-hero {
+  margin-top: 0.15rem;
+  margin-bottom: 1.25rem;
+}
+
+@media (min-width: 640px) {
+  .landing-hero {
+    margin-top: 0.35rem;
+    margin-bottom: 1.5rem;
+  }
+
+  .landing-hero-title {
+    margin-bottom: 0.65rem;
+  }
+}
+
+@media (min-width: 1024px) {
+  .landing-page {
+    /* Keep heading clearly under chrome, books close underneath */
+    padding-top: max(6.25rem, calc(env(safe-area-inset-top) + 5rem));
+  }
+
+  .landing-content {
+    justify-content: flex-start;
+    gap: 0;
+    padding-bottom: 2rem;
+  }
+
+  .landing-hero {
+    margin-bottom: 1.75rem;
+  }
+}
+
+@media (min-width: 1440px) {
+  .landing-page {
+    padding-top: max(6.75rem, calc(env(safe-area-inset-top) + 5.5rem));
+  }
+
+  .landing-hero {
+    margin-bottom: 2rem;
+  }
+}
+
+.landing-bg-glow {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    ellipse 55% 45% at 32% 28%,
+    rgba(120, 155, 230, 0.4) 0%,
+    transparent 70%
+  );
+}
+
+.landing-bg-grain {
+  position: absolute;
+  inset: 0;
+  opacity: 0.4;
+  mix-blend-mode: overlay;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 180px 180px;
+}
+
+.landing-watermark-field {
+  position: absolute;
+  inset: -25%;
+  display: flex;
+  justify-content: space-evenly;
+  align-items: center;
+  opacity: 0.055;
+  color: #ffffff;
+  pointer-events: none;
+}
+
+/* Each column: lots of "Rostrum" stacked vertically, whole column tilted 45° */
+.landing-watermark-col {
+  flex: 0 0 auto;
+  height: 160%;
+  overflow: hidden;
+  transform: rotate(-45deg);
+}
+
+.landing-watermark-col-track {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2.75rem;
+  width: max-content;
+  animation: landing-watermark-scroll-y 42s linear infinite;
+  will-change: transform;
+}
+
+.landing-watermark-col.is-reverse .landing-watermark-col-track {
+  animation-direction: reverse;
+  animation-duration: 50s;
+}
+
+.landing-watermark {
+  font-size: clamp(1.75rem, 4.5vw, 3.25rem);
+  line-height: 1;
+  white-space: nowrap;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+@keyframes landing-watermark-scroll-y {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    /* Track is duplicated — shift by half for a seamless loop */
+    transform: translateY(-50%);
+  }
+}
+
+.landing-subtitle {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.2rem;
+  line-height: 1.45;
+}
+
+.landing-hero-title {
+  font-size: clamp(1.2rem, 5.6vw, 1.55rem);
+  line-height: 1.15;
+  max-width: none;
+  margin-inline: auto;
+  white-space: nowrap;
+}
+
+@media (min-width: 640px) {
+  .landing-hero-title {
+    font-size: clamp(1.85rem, 4vw, 3rem);
+    white-space: normal;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .landing-watermark-col-track {
+    animation: none;
+  }
+}
+
+.landing-book__label h2 {
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.landing-book__label h3 {
+  color: #ffffff;
+}
+
+.landing-book:hover .landing-book__label h3 {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.landing-brand-link {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.28rem 0.45rem;
+  border-radius: 0.5rem;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.2);
+}
+
+@media (min-width: 640px) {
+  .landing-brand-link {
+    padding: 0.35rem 0.6rem;
+    border-radius: 0.55rem;
+  }
+}
+
+.landing-contact-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  white-space: nowrap;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 0.38rem 0.7rem;
+  border-radius: 999px;
+  color: #fff;
+  background: linear-gradient(135deg, #ce1d47 0%, #a01e3e 55%, #740d28 100%);
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  box-shadow:
+    0 8px 20px rgba(80, 0, 20, 0.22),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22);
+  transition: transform 0.2s ease, filter 0.2s ease, box-shadow 0.2s ease;
+}
+
+.landing-contact-btn:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.06);
+  box-shadow:
+    0 10px 24px rgba(80, 0, 20, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.28);
+}
+
+/* Landing prospectus = same solid closed-book look as the flipbook cover */
+.landing-book {
+  background: transparent;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  width: min(100%, 92vw);
+  max-width: 22rem;
+  transition: transform 0.3s ease;
+}
+
+.landing-book:hover {
+  transform: translateY(-6px);
+}
+
+/* Explicit CTA styles — parent <button> reset was killing Tailwind padding */
+.landing-book__cta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.7rem 1.4rem;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #0f172a;
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.2;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.28);
+  transform: translateY(0.75rem);
+  transition: transform 0.3s ease;
+  box-sizing: border-box;
+}
+
+.landing-book:hover .landing-book__cta {
+  transform: translateY(0);
+}
+
+@media (min-width: 640px) {
+  .landing-book__cta {
+    padding: 0.8rem 1.6rem;
+    font-size: 0.9375rem;
+  }
+}
+
+.landing-book__cover {
+  width: 100%;
+  /* Landscape cover default — matches real PDFs; avoids tall flash before pdf.js loads */
+  aspect-ratio: 1.414;
+  overflow: visible;
+}
+
+.landing-book__face {
+  border-radius: 1px 3px 3px 1px;
+  box-shadow:
+    3px 0 0 -1px rgba(252, 250, 246, 0.98),
+   
+    0 28px 50px rgba(0, 0, 0, 0.32),
+    0 12px 22px rgba(0, 0, 0, 0.2),
+    0 3px 8px rgba(0, 0, 0, 0.14);
+  transition: box-shadow 0.3s ease;
+}
+
+.landing-book:hover .landing-book__face {
+  box-shadow:
+    3px 0 0 -1px rgba(252, 250, 246, 0.98),
+   
+    0 36px 60px rgba(0, 0, 0, 0.36),
+    0 16px 28px rgba(0, 0, 0, 0.22),
+    0 4px 10px rgba(0, 0, 0, 0.16);
+}
+
+@media (min-width: 640px) {
+  .landing-contact-btn {
+    font-size: 0.875rem;
+    padding: 0.55rem 1.15rem;
+    gap: 0.4rem;
+  }
+
+  .landing-book {
+    width: 35vw;
+    max-width: 520px;
+  }
 }

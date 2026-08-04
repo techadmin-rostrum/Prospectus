@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
+import { getCachedPdf, setCachedPdf } from '../utils/pdfCache';
 
 // Configure PDF.js worker — load from our structured static copy
 pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdfjs-dist/build/pdf.worker.min.mjs';
@@ -15,14 +16,15 @@ export const PDF_LOAD_OPTIONS = {
   standardFontDataUrl: '/pdfjs-dist/standard_fonts/',
   wasmUrl: '/pdfjs-dist/wasm/',
   enableXfa: true,
-  // Stream + HTTP Range (requires Accept-Ranges from the host)
   disableStream: false,
   disableRange: false,
-  // Don't download the rest of the file until pages are requested
   disableAutoFetch: true,
-  // Smaller first chunks → faster time-to-first-page on slow networks
-  rangeChunkSize: 65536,
+  // Slightly larger chunks = fewer round-trips on high-latency links
+  rangeChunkSize: 131072,
 };
+
+/** Known cover aspect for these prospectuses (A4 landscape) */
+const DEFAULT_ASPECT = 842 / 595;
 
 /**
  * Hook to load and cache a PDF document via pdfjs-dist.
@@ -33,31 +35,39 @@ export const PDF_LOAD_OPTIONS = {
 export function usePdfDocument(pdfSrc) {
   const [pdfDocument, setPdfDocument] = useState(null);
   const [numPages, setNumPages] = useState(0);
-  const [aspectRatio, setAspectRatio] = useState(1 / 1.414);
+  const [aspectRatio, setAspectRatio] = useState(DEFAULT_ASPECT);
   const [loading, setLoading] = useState(true);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState(null);
 
-  const loadedSrcRef = useRef(null);
   const documentRef = useRef(null);
 
   useEffect(() => {
     if (!pdfSrc) return;
 
-    if (loadedSrcRef.current === pdfSrc && documentRef.current) {
-      setPdfDocument(documentRef.current);
-      setNumPages(documentRef.current.numPages);
-      setLoading(false);
-      setProgress(100);
-      return;
-    }
-
     let cancelled = false;
     let loadingTask = null;
 
+    const applyDoc = (doc) => {
+      documentRef.current = doc;
+      setPdfDocument(doc);
+      setNumPages(doc.numPages);
+      setAspectRatio(DEFAULT_ASPECT);
+      setLoading(false);
+      setProgress(100);
+      setError(null);
+    };
+
     const loadPdf = async () => {
+      // Instant open if landing (or a previous visit) already warmed this PDF
+      const cached = getCachedPdf(pdfSrc);
+      if (cached) {
+        applyDoc(cached);
+        return;
+      }
+
       setLoading(true);
-      setProgress(0);
+      setProgress(8);
       setError(null);
       setPdfDocument(null);
       setNumPages(0);
@@ -71,12 +81,10 @@ export function usePdfDocument(pdfSrc) {
         loadingTask.onProgress = ({ loaded, total }) => {
           if (cancelled) return;
           if (total > 0) {
-            // With range/auto-fetch off, "total" is file size but loaded is
-            // only what we've pulled so far — cap UI so it doesn't look stuck.
-            const pct = Math.min(95, Math.round((loaded / total) * 100));
+            const pct = Math.min(92, Math.round((loaded / total) * 100));
             setProgress((prev) => Math.max(prev, pct));
           } else if (loaded > 0) {
-            setProgress((prev) => (prev < 90 ? Math.max(prev, 15) : prev));
+            setProgress((prev) => (prev < 85 ? Math.max(prev, 20) : prev));
           }
         };
 
@@ -86,25 +94,17 @@ export function usePdfDocument(pdfSrc) {
           return;
         }
 
-        // First page metadata is enough to size the book and paint the cover
-        let aspect = 1 / 1.414;
-        try {
-          const firstPage = await doc.getPage(1);
-          const viewport = firstPage.getViewport({ scale: 1 });
-          aspect = viewport.width / viewport.height;
-        } catch (e) {
-          console.warn('Failed to get page 1 aspect ratio', e);
-        }
+        setCachedPdf(pdfSrc, doc);
+        applyDoc(doc);
 
-        if (!cancelled) {
-          loadedSrcRef.current = pdfSrc;
-          documentRef.current = doc;
-          setPdfDocument(doc);
-          setNumPages(doc.numPages);
-          setAspectRatio(aspect);
-          setLoading(false);
-          setProgress((prev) => Math.max(prev, 100));
-        }
+        // Refine aspect off the critical path
+        doc.getPage(1).then((firstPage) => {
+          if (cancelled) return;
+          const viewport = firstPage.getViewport({ scale: 1 });
+          if (viewport.width > 0 && viewport.height > 0) {
+            setAspectRatio(viewport.width / viewport.height);
+          }
+        }).catch(() => {});
       } catch (err) {
         if (!cancelled) {
           console.error('[usePdfDocument] Failed to load PDF:', err);
