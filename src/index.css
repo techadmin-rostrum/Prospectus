@@ -1249,10 +1249,12 @@ body.flipbook-turning {
    =================================================================== */
 
 .landing-page {
+  /* UG crimson (left) ↔ PG navy (right) — matches the two prospectus themes */
   background:
-    radial-gradient(ellipse 70% 55% at 28% 22%, #4a6ec4 0%, transparent 55%),
-    radial-gradient(ellipse 50% 45% at 78% 78%, #2f4da4 0%, transparent 50%),
-    linear-gradient(165deg, #3a5cb0 0%, #243f8a 42%, #1a3270 100%);
+    radial-gradient(ellipse 65% 55% at 18% 30%, rgba(206, 29, 71, 0.55) 0%, transparent 58%),
+    radial-gradient(ellipse 60% 50% at 82% 35%, rgba(74, 110, 196, 0.55) 0%, transparent 55%),
+    radial-gradient(ellipse 50% 45% at 50% 90%, rgba(116, 13, 40, 0.35) 0%, transparent 50%),
+    linear-gradient(125deg, #740d28 0%, #5a1848 28%, #243f8a 62%, #1a3270 100%);
   /* Clear logo + Contact Us, but keep mobile compact */
   padding-top: max(4.75rem, calc(env(safe-area-inset-top) + 3.75rem));
 }
@@ -1315,11 +1317,17 @@ body.flipbook-turning {
 .landing-bg-glow {
   position: absolute;
   inset: 0;
-  background: radial-gradient(
-    ellipse 55% 45% at 32% 28%,
-    rgba(120, 155, 230, 0.4) 0%,
-    transparent 70%
-  );
+  background:
+    radial-gradient(
+      ellipse 50% 42% at 22% 28%,
+      rgba(230, 120, 145, 0.35) 0%,
+      transparent 70%
+    ),
+    radial-gradient(
+      ellipse 50% 42% at 78% 32%,
+      rgba(120, 155, 230, 0.38) 0%,
+      transparent 70%
+    );
 }
 
 .landing-bg-grain {
@@ -1458,14 +1466,19 @@ body.flipbook-turning {
   box-shadow:
     0 8px 20px rgba(80, 0, 20, 0.22),
     inset 0 1px 0 rgba(255, 255, 255, 0.22);
-  transition: transform 0.2s ease, filter 0.2s ease, box-shadow 0.2s ease;
+  transition:
+    transform 0.2s ease,
+    background 0.25s ease,
+    box-shadow 0.25s ease,
+    border-color 0.25s ease;
 }
 
 .landing-contact-btn:hover {
   transform: translateY(-1px);
-  filter: brightness(1.06);
+  background: linear-gradient(135deg, #4a6ec4 0%, #2f4da4 55%, #1a3270 100%);
+  border-color: rgba(255, 255, 255, 0.35);
   box-shadow:
-    0 10px 24px rgba(80, 0, 20, 0.28),
+    0 10px 24px rgba(10, 25, 70, 0.35),
     inset 0 1px 0 rgba(255, 255, 255, 0.28);
 }
 
