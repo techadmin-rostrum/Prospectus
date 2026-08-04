@@ -10,6 +10,13 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet" />
+
+    <!--
+      The pdf.js worker is 1.2 MB and is otherwise only requested after the app
+      bundle has parsed and run. Starting it at HTML parse time overlaps that
+      download with the bundle instead of queueing behind it.
+    -->
+    <link rel="preload" href="/pdfjs-dist/build/pdf.worker.min.mjs" as="worker" />
     
     <title>Rostrum Education — Prospectus</title>
   </head>

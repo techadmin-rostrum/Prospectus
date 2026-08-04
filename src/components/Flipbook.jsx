@@ -8,7 +8,7 @@ import { usePageRenderer } from '../hooks/usePageRenderer';
 import { useSound } from '../hooks/useSound';
 import { trackEvent, EVENTS } from '../utils/analytics';
 import { syncFlipCanvases } from '../utils/syncFlipCanvases';
-import { flipBook } from '../utils/flipBook';
+import { flipBook, applyFlipDuration } from '../utils/flipBook';
 
 import PageCanvas from './PageCanvas';
 import LoadingSkeleton from './LoadingSkeleton';
@@ -34,15 +34,22 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
   const [isThumbnailsOpen, setIsThumbnailsOpen] = useState(false);
   const [zoomLevel, setZoomLevel] = useState(1);
   const [isMobile, setIsMobile] = useState(false);
+  // Wide + short viewport (phone sideways, short desktop window)
+  const [isShortLandscape, setIsShortLandscape] = useState(false);
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
   const [bookCenterY, setBookCenterY] = useState(
     typeof window !== 'undefined' ? window.innerHeight / 2 : 0
   );
 
-  // Interior turns: controlled & paper-like. Cover open: a touch slower.
-  // Mobile gets a bit more time so the soft curl reads clearly on a small screen.
-  const PAGE_FLIP_MS = isMobile ? 1100 : 900;
-  const COVER_FLIP_MS = isMobile ? 1300 : 1200;
+  // Lock mobile page size after first settle so URL-bar / RO churn can't
+  // remount the book (that restarts the cover-open animation).
+  const mobileSizeLockRef = useRef(null);
+  const currentPageRef = useRef(0);
+  currentPageRef.current = currentPage;
+
+  // Interior turns. Cover open on mobile uses a custom door animation in flipBook.
+  const PAGE_FLIP_MS = isMobile ? 1400 : 900;
+  const COVER_FLIP_MS = isMobile ? 1400 : 1200;
   const prefersReducedMotion =
     typeof window !== 'undefined' &&
     window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -50,10 +57,25 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
   const coverTransitionMs = prefersReducedMotion ? 0 : COVER_FLIP_MS;
 
   useEffect(() => {
-    const handleResize = () => {
+    let resizeTimer = null;
+
+    const isPortrait = () => window.innerHeight >= window.innerWidth;
+
+    const computeSize = () => {
       const width = window.innerWidth;
+      const height = window.innerHeight;
       const mobile = width < 768;
+      // Keyed on height, not width — a wide but short window has the same
+      // problem as a phone on its side: chrome eats the book.
+      const shortLandscape = width > height && height < 600;
       setIsMobile(mobile);
+      setIsShortLandscape(shortLandscape);
+
+      // After lock, ignore mobile resizes unless orientation flipped.
+      if (mobile && mobileSizeLockRef.current) {
+        if (mobileSizeLockRef.current.portrait === isPortrait()) return;
+        mobileSizeLockRef.current = null;
+      }
 
       // On mobile the title sits above the book — size from the stage under it
       // so the page fills that area instead of centering in leftover space.
@@ -61,26 +83,36 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
       if (!container) return;
 
       const rect = container.getBoundingClientRect();
-      // Leave room for side arrows on larger screens; tighter on phones
-      const sideGutter = mobile ? 12 : width < 1024 ? 88 : 120;
-      // Mobile title sits above the book inside the stage — reserve space for it
-      const titleReserve = mobile && width < 640 ? 44 : 0;
-      const verticalGutter = mobile ? 4 + titleReserve : 24;
+      // Portrait phones: bottom nav dock. Short landscape: side arrows, so the
+      // page can use nearly all of the scarce vertical space.
+      const sideGutter = shortLandscape ? 100 : mobile ? 8 : width < 1024 ? 88 : 120;
+      const titleReserve = mobile && !shortLandscape && width < 640 ? 40 : 0;
+      const mobileNavReserve = mobile && !shortLandscape ? 64 : 0;
+      const verticalGutter = shortLandscape ? 6 : mobile ? 4 + titleReserve + mobileNavReserve : 24;
       const availableWidth = Math.max(rect.width - sideGutter, 0);
       const availableHeight = Math.max(rect.height - verticalGutter, 0);
 
-      const aspect = aspectRatio || (1 / 1.414);
+      const aspect = aspectRatio || (842 / 595);
 
       let pageW;
       let pageH;
 
       if (mobile) {
-        // Portrait single-page: fit width first, then height
-        pageW = Math.min(availableWidth, availableHeight * aspect);
-        pageH = pageW / aspect;
-        if (pageH > availableHeight) {
+        // Single page — in landscape, prefer filling height so the page is readable
+        if (shortLandscape) {
           pageH = availableHeight;
           pageW = pageH * aspect;
+          if (pageW > availableWidth) {
+            pageW = availableWidth;
+            pageH = pageW / aspect;
+          }
+        } else {
+          pageW = Math.min(availableWidth, availableHeight * aspect);
+          pageH = pageW / aspect;
+          if (pageH > availableHeight) {
+            pageH = availableHeight;
+            pageW = pageH * aspect;
+          }
         }
       } else {
         // Landscape spread: fit two pages
@@ -95,26 +127,72 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
       // Avoid sub-pixel thrash
       pageW = Math.floor(pageW);
       pageH = Math.floor(pageH);
+      if (pageW < 1 || pageH < 1) return;
 
-      setDimensions((prev) =>
-        prev.width === pageW && prev.height === pageH ? prev : { width: pageW, height: pageH }
-      );
+      setDimensions((prev) => {
+        if (prev.width === pageW && prev.height === pageH) return prev;
+        // Ignore URL-bar / soft-keyboard jitter on mobile — remounting the
+        // book restarts the cover open animation and feels broken.
+        if (mobile && prev.width > 0) {
+          if (Math.abs(prev.width - pageW) < 32 && Math.abs(prev.height - pageH) < 56) {
+            return prev;
+          }
+        }
+        return { width: pageW, height: pageH };
+      });
     };
 
-    handleResize();
+    const widthUnder768 = () => window.innerWidth < 768;
+
+    const handleResize = () => {
+      if (resizeTimer) clearTimeout(resizeTimer);
+      // Longer debounce on phones — visual chrome changes fire often.
+      resizeTimer = setTimeout(computeSize, widthUnder768() ? 180 : 80);
+    };
+
+    computeSize();
     window.addEventListener('resize', handleResize);
-    window.visualViewport?.addEventListener('resize', handleResize);
+    // visualViewport resize (URL bar) remounts the book on mobile — skip it.
+    if (!widthUnder768()) {
+      window.visualViewport?.addEventListener('resize', handleResize);
+    }
+
+    const onOrientation = () => {
+      mobileSizeLockRef.current = null;
+      handleResize();
+    };
+    window.addEventListener('orientationchange', onOrientation);
 
     const observer = new ResizeObserver(handleResize);
     if (mainRef.current) observer.observe(mainRef.current);
     if (mainStageRef.current) observer.observe(mainStageRef.current);
 
     return () => {
+      if (resizeTimer) clearTimeout(resizeTimer);
       window.removeEventListener('resize', handleResize);
       window.visualViewport?.removeEventListener('resize', handleResize);
+      window.removeEventListener('orientationchange', onOrientation);
       observer.disconnect();
     };
-  }, [aspectRatio]);
+  }, [aspectRatio, loading]);
+
+  // Once the book is on screen at a stable size, lock it on mobile.
+  useEffect(() => {
+    if (loading) {
+      mobileSizeLockRef.current = null;
+      return;
+    }
+    if (!isMobile || dimensions.width === 0) return;
+    if (mobileSizeLockRef.current) return;
+    const t = setTimeout(() => {
+      mobileSizeLockRef.current = {
+        width: dimensions.width,
+        height: dimensions.height,
+        portrait: window.innerHeight >= window.innerWidth,
+      };
+    }, 250);
+    return () => clearTimeout(t);
+  }, [loading, isMobile, dimensions.width, dimensions.height]);
 
   useEffect(() => {
     if (!bookRef.current || !bookRef.current.pageFlip) return;
@@ -156,12 +234,20 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
   const onChangeState = useCallback((e) => {
     const turning =
       e.data === 'flipping' || e.data === 'user_fold' || e.data === 'fold_corner';
-    // Only treat real turns as "flipping" for shadow/filter (not corner hover)
-    setIsFlipping(e.data === 'flipping' || e.data === 'user_fold');
+    const flipping = e.data === 'flipping' || e.data === 'user_fold';
 
-    // Un-clip the book area for the whole turn (incl. corner folds) via a DOM
-    // class — setState here would re-render the book mid-fold.
+    // Un-clip + hide cover depth via DOM *before* React paints — setState alone
+    // is too late on mobile and the flip runs under the closed-book overlay.
     mainRef.current?.classList.toggle('is-turning', e.data !== 'read');
+    bookStageRef.current?.classList.toggle('is-flipping', flipping);
+
+    const atCover =
+      currentPage === 0 || (numPages > 0 && currentPage === numPages - 1);
+    // Hard cover open needs real perspective — only while a cover is turning
+    // so soft interior curls stay flat/2D.
+    mainRef.current?.classList.toggle('is-cover-turning', flipping && atCover);
+
+    setIsFlipping(flipping);
 
     // Soft flips clone the page DOM without canvas pixels — copy them now.
     if (turning) {
@@ -177,6 +263,10 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
         if (numPages > 0 && currentPage === numPages - 1) setIsBackCoverView(false);
       }
     }
+
+    if (e.data === 'read') {
+      mainRef.current?.classList.remove('is-cover-turning');
+    }
   }, [currentPage, isMobile, playPageTurn, numPages]);
 
   // Keep library flip duration in sync before the next turn starts.
@@ -184,8 +274,8 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
     const flip = bookRef.current?.pageFlip?.();
     if (!flip || prefersReducedMotion) return;
     const atCover = currentPage === 0 || (numPages > 0 && currentPage === numPages - 1);
-    flip.getSettings().flippingTime = atCover ? COVER_FLIP_MS : PAGE_FLIP_MS;
-  }, [currentPage, prefersReducedMotion, loading, numPages, isMobile]);
+    applyFlipDuration(flip, atCover ? COVER_FLIP_MS : PAGE_FLIP_MS);
+  }, [currentPage, prefersReducedMotion, loading, numPages, isMobile, COVER_FLIP_MS, PAGE_FLIP_MS]);
 
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -308,7 +398,9 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
     : '';
 
   return (
-    <div className={`flipbook-shell flipbook-shell--${theme} h-dvh max-h-dvh flex flex-col relative overflow-hidden`}>
+    <div
+      className={`flipbook-shell flipbook-shell--${theme} h-dvh max-h-dvh flex flex-col relative overflow-hidden`}
+    >
       <div
         className="absolute inset-0 pointer-events-none select-none overflow-hidden z-0"
         aria-hidden="true"
@@ -317,7 +409,8 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
         <div className="flipbook-bg-grain" />
         <div className="flipbook-watermark-field">
           {Array.from({ length: 5 }, (_, col) => {
-            const words = Array.from({ length: 28 }, () => 'Rostrum');
+            // Long duplicated track so the -50% loop never shows empty space
+            const words = Array.from({ length: 32 }, () => 'Rostrum');
             return (
               <div
                 key={col}
@@ -382,7 +475,11 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
             <div className="flipbook-title-box flipbook-title--mobile font-display font-medium text-white">
               {title}
             </div>
-            <LoadingSkeleton progress={progress} />
+            <LoadingSkeleton
+              progress={progress}
+              width={dimensions.width}
+              height={dimensions.height}
+            />
           </div>
         ) : (
           <motion.div
@@ -455,7 +552,7 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
                   }}
                 >
                 <HTMLFlipBook
-                  key={`book-${isMobile ? 'm' : 'd'}-${Math.round(pageW / 8) * 8}x${Math.round(pageH / 8) * 8}`}
+                  key={`book-${isMobile ? 'm' : 'd'}-${Math.round(dimensions.width / 64) * 64}x${Math.round(dimensions.height / 64) * 64}`}
                   width={pageW}
                   height={pageH}
                   size="fixed"
@@ -467,17 +564,19 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
                   maxShadowOpacity={isMobile ? 0.85 : 0.7}
                   showCover={true}
                   mobileScrollSupport={true}
-                  useMouseEvents={true}
-                  showPageCorners={true}
-                  disableFlipByClick={false}
-                  swipeDistance={isMobile ? 15 : 25}
+                  /* On mobile cover, block library hard-flip (image vanishes) —
+                     arrows / keyboard use our door-open instead. */
+                  useMouseEvents={!(isMobile && currentPage === 0)}
+                  showPageCorners={!isMobile}
+                  disableFlipByClick={isMobile && currentPage === 0}
+                  swipeDistance={isMobile && currentPage === 0 ? 99999 : isMobile ? 20 : 25}
                   clickEventForward={true}
                   className={singleCentered ? 'flip-shadow flip-shadow--cover' : 'flip-shadow'}
                   ref={bookRef}
                   onFlip={onFlip}
                   onChangeState={onChangeState}
                   onInit={() => {
-                    // Keep interior pages soft so turns curl instead of hard-folding
+                    // Hard covers (door-open) + soft interior pages (paper curl)
                     const flip = bookRef.current?.pageFlip?.();
                     if (!flip) return;
                     const count = flip.getPageCount();
@@ -491,14 +590,18 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
                         page.setDrawingDensity?.('soft');
                       }
                     }
-                    // Restore page after resize remount
-                    const restoreTo = Math.min(Math.max(currentPage, 0), count - 1);
+                    // Restore page after resize remount — use turnToPage (instant)
+                    // not flip, so the cover doesn't "open" again.
+                    const restoreTo = Math.min(Math.max(currentPageRef.current, 0), count - 1);
                     if (restoreTo > 0) {
                       flip.turnToPage(restoreTo);
                     }
                     const idx = flip.getCurrentPageIndex?.() ?? restoreTo;
                     setIsCoverView(idx === 0);
                     setIsBackCoverView(count > 0 && idx === count - 1);
+                    setIsFlipping(false);
+                    mainRef.current?.classList.remove('is-turning', 'is-cover-turning');
+                    bookStageRef.current?.classList.remove('is-flipping');
                   }}
                   usePortrait={isMobile}
                   flippingTime={flipDurationMs}
@@ -540,6 +643,7 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
         {!loading && (
           <Controls
             pageFlip={bookRef.current?.pageFlip()}
+            getPageFlip={() => bookRef.current?.pageFlip?.()}
             numPages={numPages}
             currentPage={currentPage}
             isMuted={isMuted}
@@ -559,6 +663,7 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
             bookCenterY={bookCenterY}
             docked
             isMobile={isMobile}
+            isShortLandscape={isShortLandscape}
             bookAreaRef={mainRef}
           />
         )}

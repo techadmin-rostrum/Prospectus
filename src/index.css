@@ -185,6 +185,30 @@ body {
   perspective: none;
 }
 
+/* Mobile portrait hard-cover door — custom clone animation (see flipBook.js).
+   page-flip's hard rotateY is landscape-oriented and drops the cover image. */
+.flipbook-stage.cover-door-animating {
+  overflow: visible !important;
+  transform-style: preserve-3d;
+}
+
+.flipbook-stage.cover-door-animating .book-cover-depth {
+  opacity: 0 !important;
+  visibility: hidden !important;
+}
+
+.flipbook-stage .cover-door-clone {
+  transform-style: preserve-3d;
+  background: #fff !important;
+}
+
+.flipbook-stage .cover-door-clone canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+  background: #fff !important;
+}
+
 /*
   Soft page turns use clip-path + 2D rotate.
   backface-visibility / preserve-3d on soft items breaks that and makes
@@ -328,6 +352,15 @@ body {
     inset 0 0 0 1px rgba(255, 255, 255, 0.07),
     inset -2px 0 5px -2px rgba(0, 0, 0, 0.3),
     inset 0 -2px 5px -2px rgba(0, 0, 0, 0.22);
+}
+
+/* Drop cover chrome the instant a turn starts (DOM class), before React
+   re-renders — otherwise the overlay hides the whole flip and the next
+   page just "appears" on mobile. */
+.flipbook-main.is-turning .book-cover-depth,
+.flipbook-stage.is-flipping .book-cover-depth {
+  opacity: 0 !important;
+  visibility: hidden !important;
 }
 
 .flipbook-stage--closed-back .book-cover-depth {
@@ -530,6 +563,52 @@ body.flipbook-turning {
   animation: shimmer 2s ease-in-out infinite;
 }
 
+/* Loading placeholder — mirrors the closed cover so nothing jumps on load */
+.flipbook-skeleton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  max-width: 100%;
+  max-height: 100%;
+}
+
+.flipbook-skeleton__page {
+  position: relative;
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 1px 3px 3px 1px;
+  border: 1px solid rgba(226, 232, 240, 0.9);
+  background: linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 100%);
+  box-shadow:
+    0 34px 60px rgba(0, 0, 0, 0.42),
+    0 14px 26px rgba(0, 0, 0, 0.26),
+    0 4px 9px rgba(0, 0, 0, 0.18);
+}
+
+.flipbook-skeleton__spine {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: clamp(6px, 2.4%, 18px);
+  background: linear-gradient(
+    90deg,
+    rgba(0, 0, 0, 0.16) 0%,
+    rgba(0, 0, 0, 0.06) 55%,
+    transparent 100%
+  );
+}
+
+/* Inside the page so the skeleton is exactly one cover tall — a bar below it
+   would overflow short viewports and push into the header. */
+.flipbook-skeleton__progress {
+  position: absolute;
+  left: 50%;
+  bottom: clamp(0.65rem, 7%, 1.75rem);
+  transform: translateX(-50%);
+  width: min(74%, 16rem);
+}
+
 /* Page elevation — only the stage drop-shadow; avoid a second hard floor band */
 .flip-shadow {
   box-shadow: none !important;
@@ -652,10 +731,16 @@ body.flipbook-turning {
 }
 
 .flipbook-watermark-col {
-  flex: 0 0 auto;
+  flex: 1 1 0;
+  min-width: 0;
   height: 160%;
   overflow: hidden;
-  transform: rotate(-45deg);
+  display: flex;
+  justify-content: center;
+  /* Rotate the column; keep a stable compositing layer so mobile GPUs
+     don't drop the layer mid-loop (looks like columns "vanish"). */
+  transform: rotate(-45deg) translateZ(0);
+  backface-visibility: hidden;
 }
 
 .flipbook-watermark-col-track {
@@ -665,11 +750,11 @@ body.flipbook-turning {
   gap: 2.75rem;
   width: max-content;
   animation: landing-watermark-scroll-y 42s linear infinite;
-  will-change: transform;
+  backface-visibility: hidden;
 }
 
 .flipbook-watermark-col.is-reverse .flipbook-watermark-col-track {
-  animation-direction: reverse;
+  animation-name: landing-watermark-scroll-y-rev;
   animation-duration: 50s;
 }
 
@@ -679,6 +764,50 @@ body.flipbook-turning {
   white-space: nowrap;
   user-select: none;
   flex-shrink: 0;
+}
+
+/* Portrait: keep all 5 cols, wider field + bigger column gap */
+@media (max-width: 767px) {
+  .flipbook-watermark-field {
+    inset: -70% -45%;
+    justify-content: space-evenly;
+    gap: clamp(2.75rem, 14vw, 5rem);
+    opacity: 0.055;
+  }
+
+  .flipbook-watermark-col {
+    flex: 0 0 auto;
+    height: 220%;
+  }
+
+  .flipbook-watermark-col-track {
+    gap: 2.5rem;
+  }
+
+  .flipbook-watermark {
+    font-size: clamp(0.95rem, 3.6vw, 1.2rem);
+    letter-spacing: 0.02em;
+  }
+}
+
+/* Very small phones: even more space between cols */
+@media (max-width: 400px) {
+  .flipbook-watermark-field {
+    inset: -90% -70%;
+    gap: clamp(3.5rem, 22vw, 6.5rem);
+  }
+
+  .flipbook-watermark-col {
+    height: 260%;
+  }
+
+  .flipbook-watermark-col-track {
+    gap: 2.75rem;
+  }
+
+  .flipbook-watermark {
+    font-size: clamp(0.85rem, 3.4vw, 1.05rem);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -802,12 +931,12 @@ body.flipbook-turning {
     grid-column: 1;
     grid-row: 1;
     justify-self: start;
-    padding: 0.28rem 0.45rem;
-    border-radius: 0.5rem;
+    padding: 0.35rem 0.55rem;
+    border-radius: 0.55rem;
   }
 
   .flipbook-chrome-header .flipbook-brand-logo {
-    height: 1.35rem;
+    height: 2.2rem;
   }
 
   .flipbook-chrome-header .flipbook-contact-btn {
@@ -1032,6 +1161,39 @@ body.flipbook-turning {
   height: 1.1rem;
 }
 
+/* Mobile: prev/next sit under the book, centered — never over the pages.
+   Full-width flex (not translateX) so Motion's transform doesn't un-center them. */
+.flipbook-mobile-nav-dock {
+  position: fixed;
+  left: 0;
+  right: 0;
+  width: 100%;
+  bottom: calc(4.35rem + env(safe-area-inset-bottom, 0px));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2.75rem;
+  z-index: 35;
+  pointer-events: none;
+}
+
+.flipbook-mobile-nav-dock .flipbook-nav-arrow {
+  position: relative;
+  left: auto !important;
+  right: auto !important;
+  top: auto !important;
+  transform: none;
+  pointer-events: auto;
+  width: 2.85rem;
+  height: 2.85rem;
+  flex-shrink: 0;
+}
+
+.flipbook-mobile-nav-dock .flipbook-nav-arrow svg {
+  width: 1.25rem;
+  height: 1.25rem;
+}
+
 @media (min-width: 480px) {
   .flipbook-controls-bar {
     padding: 4px !important;
@@ -1204,6 +1366,242 @@ body.flipbook-turning {
 }
 
 /* ===================================================================
+   Short + wide viewports (phone landscape, short desktop windows)
+   Height is the scarce resource here, so every piece of chrome
+   shrinks and the book takes what's left. Keyed on height so it
+   also covers wide-but-short windows, not just phones.
+   =================================================================== */
+@media (orientation: landscape) and (max-height: 600px) {
+  .flipbook-shell {
+    padding-top: max(0.15rem, env(safe-area-inset-top));
+    padding-bottom: 0;
+  }
+
+  .flipbook-chrome-header {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 0.3rem 0.5rem;
+    padding: 0.1rem max(0.5rem, env(safe-area-inset-right)) 0.1rem
+      max(0.5rem, env(safe-area-inset-left));
+  }
+
+  .flipbook-brand-link {
+    padding: 0.2rem 0.4rem;
+    border-radius: 0.45rem;
+  }
+
+  .flipbook-brand-logo {
+    height: 1.5rem;
+  }
+
+  /* One-line title in the header bar; the stacked mobile caption would
+     steal a whole row of book height. */
+  .flipbook-title--desktop {
+    display: block;
+    font-size: 0.8rem;
+    padding: 0.2rem 0.6rem;
+    border-radius: 0.45rem;
+    max-width: 100%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .flipbook-title--mobile {
+    display: none !important;
+  }
+
+  .flipbook-contact-btn {
+    font-size: 0.7rem;
+    padding: 0.28rem 0.65rem;
+    gap: 0.25rem;
+  }
+
+  .flipbook-contact-btn svg {
+    width: 11px;
+    height: 11px;
+  }
+
+  .flipbook-chrome-footer {
+    min-height: 0;
+    padding: 0.15rem 0.4rem max(0.2rem, env(safe-area-inset-bottom));
+  }
+
+  .flipbook-main-stage {
+    padding: 0;
+  }
+
+  .flipbook-controls-bar {
+    padding: 2px !important;
+  }
+
+  .flipbook-controls-bar .flipbook-icon-btn {
+    padding: 5px;
+    min-width: 28px;
+    min-height: 28px;
+  }
+
+  .flipbook-controls-bar .flipbook-icon-btn svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  .flipbook-controls-bar .flipbook-page-input {
+    width: 32px;
+    padding: 2px;
+    font-size: 11px;
+  }
+
+  .flipbook-controls-bar .flipbook-page-total {
+    font-size: 10px;
+  }
+
+  .flipbook-controls-bar .flipbook-divider {
+    height: 16px;
+    margin: 0 2px;
+  }
+
+  .flipbook-nav-arrow {
+    width: 2.1rem;
+    height: 2.1rem;
+    left: max(0.3rem, env(safe-area-inset-left));
+  }
+
+  .flipbook-nav-arrow--next {
+    left: auto;
+    right: max(0.3rem, env(safe-area-inset-right));
+  }
+
+  .flipbook-nav-arrow svg {
+    width: 1rem;
+    height: 1rem;
+  }
+
+  /* If the portrait dock is still mounted mid-rotation, keep it off the book */
+  .flipbook-mobile-nav-dock {
+    bottom: calc(2.5rem + env(safe-area-inset-bottom, 0px));
+    gap: 1.5rem;
+  }
+
+  .flipbook-mobile-nav-dock .flipbook-nav-arrow {
+    width: 2.1rem;
+    height: 2.1rem;
+  }
+}
+
+/* Narrow phones sideways: no room for the title between logo and button */
+@media (orientation: landscape) and (max-height: 600px) and (max-width: 620px) {
+  .flipbook-chrome-header {
+    grid-template-columns: auto auto;
+    justify-content: space-between;
+  }
+
+  .flipbook-title--desktop {
+    display: none;
+  }
+}
+
+@media (orientation: landscape) and (max-height: 430px) {
+  .flipbook-brand-logo {
+    height: 1.2rem;
+  }
+
+  .flipbook-title--desktop {
+    font-size: 0.7rem;
+    padding: 0.15rem 0.45rem;
+  }
+
+  .flipbook-contact-btn {
+    font-size: 0.62rem;
+    padding: 0.22rem 0.5rem;
+  }
+
+  .flipbook-contact-btn svg {
+    width: 10px;
+    height: 10px;
+  }
+
+  .flipbook-controls-bar .flipbook-icon-btn {
+    padding: 4px;
+    min-width: 25px;
+    min-height: 25px;
+  }
+
+  .flipbook-controls-bar .flipbook-icon-btn svg {
+    width: 13px;
+    height: 13px;
+  }
+
+  .flipbook-nav-arrow {
+    width: 1.85rem;
+    height: 1.85rem;
+  }
+
+  .flipbook-nav-arrow svg {
+    width: 0.85rem;
+    height: 0.85rem;
+  }
+}
+
+@media (orientation: landscape) and (max-height: 330px) {
+  .flipbook-shell {
+    padding-top: 0;
+  }
+
+  .flipbook-chrome-header {
+    padding-top: 0.05rem;
+    padding-bottom: 0.05rem;
+  }
+
+  .flipbook-brand-link {
+    padding: 0.15rem 0.3rem;
+  }
+
+  .flipbook-brand-logo {
+    height: 1rem;
+  }
+
+  .flipbook-title--desktop {
+    font-size: 0.62rem;
+    padding: 0.12rem 0.4rem;
+  }
+
+  .flipbook-contact-btn {
+    font-size: 0.56rem;
+    padding: 0.18rem 0.42rem;
+  }
+
+  .flipbook-chrome-footer {
+    padding: 0.1rem 0.3rem max(0.1rem, env(safe-area-inset-bottom));
+  }
+
+  .flipbook-controls-bar .flipbook-icon-btn {
+    padding: 3px;
+    min-width: 22px;
+    min-height: 22px;
+  }
+
+  .flipbook-controls-bar .flipbook-icon-btn svg {
+    width: 12px;
+    height: 12px;
+  }
+
+  .flipbook-controls-bar .flipbook-page-input {
+    width: 28px;
+    font-size: 10px;
+  }
+
+  .flipbook-nav-arrow {
+    width: 1.6rem;
+    height: 1.6rem;
+  }
+
+  .flipbook-nav-arrow svg {
+    width: 0.75rem;
+    height: 0.75rem;
+  }
+}
+
+/* ===================================================================
    react-pageflip overrides
    =================================================================== */
 
@@ -1353,10 +1751,14 @@ body.flipbook-turning {
 
 /* Each column: lots of "Rostrum" stacked vertically, whole column tilted 45° */
 .landing-watermark-col {
-  flex: 0 0 auto;
+  flex: 1 1 0;
+  min-width: 0;
   height: 160%;
   overflow: hidden;
-  transform: rotate(-45deg);
+  display: flex;
+  justify-content: center;
+  transform: rotate(-45deg) translateZ(0);
+  backface-visibility: hidden;
 }
 
 .landing-watermark-col-track {
@@ -1366,11 +1768,11 @@ body.flipbook-turning {
   gap: 2.75rem;
   width: max-content;
   animation: landing-watermark-scroll-y 42s linear infinite;
-  will-change: transform;
+  backface-visibility: hidden;
 }
 
 .landing-watermark-col.is-reverse .landing-watermark-col-track {
-  animation-direction: reverse;
+  animation-name: landing-watermark-scroll-y-rev;
   animation-duration: 50s;
 }
 
@@ -1382,6 +1784,50 @@ body.flipbook-turning {
   flex-shrink: 0;
 }
 
+/* Portrait: keep all 5 cols, wider field + bigger column gap */
+@media (max-width: 767px) {
+  .landing-watermark-field {
+    inset: -70% -45%;
+    justify-content: space-evenly;
+    gap: clamp(2.75rem, 14vw, 5rem);
+    opacity: 0.055;
+  }
+
+  .landing-watermark-col {
+    flex: 0 0 auto;
+    height: 220%;
+  }
+
+  .landing-watermark-col-track {
+    gap: 2.5rem;
+  }
+
+  .landing-watermark {
+    font-size: clamp(0.95rem, 3.6vw, 1.2rem);
+    letter-spacing: 0.02em;
+  }
+}
+
+/* Very small phones: even more space between cols */
+@media (max-width: 400px) {
+  .landing-watermark-field {
+    inset: -90% -70%;
+    gap: clamp(3.5rem, 22vw, 6.5rem);
+  }
+
+  .landing-watermark-col {
+    height: 260%;
+  }
+
+  .landing-watermark-col-track {
+    gap: 2.75rem;
+  }
+
+  .landing-watermark {
+    font-size: clamp(0.85rem, 3.4vw, 1.05rem);
+  }
+}
+
 @keyframes landing-watermark-scroll-y {
   from {
     transform: translateY(0);
@@ -1389,6 +1835,15 @@ body.flipbook-turning {
   to {
     /* Track is duplicated — shift by half for a seamless loop */
     transform: translateY(-50%);
+  }
+}
+
+@keyframes landing-watermark-scroll-y-rev {
+  from {
+    transform: translateY(-50%);
+  }
+  to {
+    transform: translateY(0);
   }
 }
 

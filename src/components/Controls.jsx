@@ -7,6 +7,7 @@ const ARROW_IDLE_MS = 5000;
 
 export default function Controls({
   pageFlip,
+  getPageFlip,
   numPages,
   currentPage,
   isMuted,
@@ -20,8 +21,12 @@ export default function Controls({
   bookCenterY,
   docked = false,
   isMobile = false,
+  isShortLandscape = false,
   bookAreaRef,
 }) {
+  const resolveFlip = () => getPageFlip?.() || pageFlip;
+  // Bottom dock only on portrait phones — short landscape uses side arrows
+  const useDockedArrows = isMobile && !isShortLandscape;
   const [barVisible, setBarVisible] = useState(true);
   const [arrowsVisible, setArrowsVisible] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -135,7 +140,7 @@ export default function Controls({
     e.preventDefault();
     const target = parseInt(pageInput, 10);
     if (!isNaN(target) && target >= 1 && target <= numPages) {
-      pageFlip?.turnToPage(target - 1);
+      resolveFlip()?.turnToPage(target - 1);
     } else {
       setPageInput(String(currentPage + 1));
     }
@@ -169,26 +174,56 @@ export default function Controls({
     <>
       <AnimatePresence>
         {arrowsVisible && (
-          <>
-            <NavArrow
-              direction="prev"
-              onClick={() => flipBook(pageFlip, 'prev')}
-              disabled={isFirstPage}
-              bookCenterY={bookCenterY}
-              isMobile={isMobile}
-              onMouseEnter={onArrowEnter}
-              onMouseLeave={onArrowLeave}
-            />
-            <NavArrow
-              direction="next"
-              onClick={() => flipBook(pageFlip, 'next')}
-              disabled={isLastPage}
-              bookCenterY={bookCenterY}
-              isMobile={isMobile}
-              onMouseEnter={onArrowEnter}
-              onMouseLeave={onArrowLeave}
-            />
-          </>
+          useDockedArrows ? (
+            <motion.div
+              key="mobile-nav-dock"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
+              className="flipbook-mobile-nav-dock"
+            >
+              <NavArrow
+                direction="prev"
+                onClick={() => flipBook(resolveFlip(), 'prev')}
+                disabled={isFirstPage}
+                isMobile
+                docked
+                onMouseEnter={onArrowEnter}
+                onMouseLeave={onArrowLeave}
+              />
+              <NavArrow
+                direction="next"
+                onClick={() => flipBook(resolveFlip(), 'next')}
+                disabled={isLastPage}
+                isMobile
+                docked
+                onMouseEnter={onArrowEnter}
+                onMouseLeave={onArrowLeave}
+              />
+            </motion.div>
+          ) : (
+            <>
+              <NavArrow
+                direction="prev"
+                onClick={() => flipBook(resolveFlip(), 'prev')}
+                disabled={isFirstPage}
+                bookCenterY={bookCenterY}
+                isMobile={isMobile}
+                onMouseEnter={onArrowEnter}
+                onMouseLeave={onArrowLeave}
+              />
+              <NavArrow
+                direction="next"
+                onClick={() => flipBook(resolveFlip(), 'next')}
+                disabled={isLastPage}
+                bookCenterY={bookCenterY}
+                isMobile={isMobile}
+                onMouseEnter={onArrowEnter}
+                onMouseLeave={onArrowLeave}
+              />
+            </>
+          )
         )}
       </AnimatePresence>
 
@@ -274,21 +309,24 @@ function NavArrow({
   disabled,
   bookCenterY,
   isMobile,
+  docked = false,
   onMouseEnter,
   onMouseLeave,
 }) {
   const isPrev = direction === 'prev';
-  const top = typeof bookCenterY === 'number' && bookCenterY > 0
+  const top = !docked && typeof bookCenterY === 'number' && bookCenterY > 0
     ? bookCenterY
-    : '50%';
+    : !docked
+      ? '50%'
+      : undefined;
 
   return (
     <motion.button
       key={`${direction}-arrow`}
       type="button"
-      initial={{ opacity: 0, x: isPrev ? -12 : 12 }}
-      animate={{ opacity: disabled ? 0 : 1, x: 0 }}
-      exit={{ opacity: 0, x: isPrev ? -12 : 12 }}
+      initial={docked ? { opacity: 0 } : { opacity: 0, x: isPrev ? -12 : 12 }}
+      animate={{ opacity: disabled ? 0.35 : 1, ...(docked ? {} : { x: 0 }) }}
+      exit={docked ? { opacity: 0 } : { opacity: 0, x: isPrev ? -12 : 12 }}
       transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
       whileHover={disabled || isMobile ? {} : { scale: 1.08 }}
       whileTap={disabled ? {} : { scale: 0.92 }}
@@ -299,13 +337,14 @@ function NavArrow({
       aria-label={isPrev ? 'Previous Page' : 'Next Page'}
       className={`
         flipbook-nav-arrow ${isPrev ? '' : 'flipbook-nav-arrow--next'}
-        group fixed -translate-y-1/2 z-30
+        ${docked ? 'flipbook-nav-arrow--docked' : 'fixed -translate-y-1/2'}
+        group z-30
         rounded-full flex items-center justify-center
         ${disabled ? 'pointer-events-none' : 'cursor-pointer'}
         transition-[opacity,transform] duration-200
       `}
       style={{
-        top,
+        ...(top != null ? { top } : {}),
         padding: 0,
         background: 'rgba(255,255,255,0.85)',
         backdropFilter: 'blur(24px) saturate(180%)',

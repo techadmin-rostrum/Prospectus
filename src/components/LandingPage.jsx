@@ -1,11 +1,6 @@
-import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router';
 import { motion } from 'motion/react';
-import * as pdfjsLib from 'pdfjs-dist';
-import { PDF_LOAD_OPTIONS } from '../hooks/usePdfDocument';
-import { setCachedPdf, getCachedPdf } from '../utils/pdfCache';
-
-pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdfjs-dist/build/pdf.worker.min.mjs';
+import { warmPdf } from '../utils/warmPdf';
 
 const COVER_RATIO = 842 / 595;
 
@@ -54,7 +49,7 @@ export default function LandingPage() {
         <div className="landing-bg-grain" />
         <div className="landing-watermark-field">
           {Array.from({ length: 5 }, (_, col) => {
-            const words = Array.from({ length: 28 }, () => 'Rostrum');
+            const words = Array.from({ length: 32 }, () => 'Rostrum');
             return (
               <div
                 key={col}
@@ -105,19 +100,19 @@ export default function LandingPage() {
           <ProspectusCard
             title="Undergraduate"
             subtitle="2026 Entry"
-            pdfSrc="/pdfs/UG26.pdf"
+            pdfSrc="/pdfs/UG26.v2.pdf"
+            coverSrc="/covers/ug-cover.jpg"
             delay={0.4}
             onClick={() => navigate('/ug')}
-            loadPriority={0}
           />
 
           <ProspectusCard
             title="Postgraduate"
             subtitle="2026 Entry"
-            pdfSrc="/pdfs/PG26.pdf"
+            pdfSrc="/pdfs/PG26.v2.pdf"
+            coverSrc="/covers/pg-cover.jpg"
             delay={0.5}
             onClick={() => navigate('/pg')}
-            loadPriority={1}
           />
         </div>
       </div>
@@ -125,76 +120,13 @@ export default function LandingPage() {
   );
 }
 
-function ProspectusCard({ title, subtitle, pdfSrc, onClick, delay, loadPriority = 0 }) {
-  const [thumbnailUrl, setThumbnailUrl] = useState(null);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    const generateThumbnail = async () => {
-      try {
-        // Stagger so UG + PG don't fight for bandwidth at once
-        if (loadPriority > 0) {
-          await new Promise((r) => setTimeout(r, loadPriority * 450));
-          if (cancelled) return;
-        }
-
-        let pdf = getCachedPdf(pdfSrc);
-        if (!pdf) {
-          const loadingTask = pdfjsLib.getDocument({
-            url: pdfSrc,
-            ...PDF_LOAD_OPTIONS,
-          });
-          pdf = await loadingTask.promise;
-          if (cancelled) {
-            pdf.destroy?.();
-            return;
-          }
-          // Keep open for Flipbook — clicking "Read Book" reuses this doc
-          setCachedPdf(pdfSrc, pdf);
-        }
-
-        const page = await pdf.getPage(1);
-        if (cancelled) return;
-
-        const viewport = page.getViewport({ scale: 1 });
-        const targetWidth = 640;
-        const scale = targetWidth / viewport.width;
-        const scaled = page.getViewport({ scale });
-
-        const canvas = document.createElement('canvas');
-        canvas.width = scaled.width;
-        canvas.height = scaled.height;
-        const ctx = canvas.getContext('2d', { alpha: false });
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        await page.render({
-          canvasContext: ctx,
-          viewport: scaled,
-          background: 'rgb(255,255,255)',
-        }).promise;
-        if (cancelled) return;
-
-        setThumbnailUrl(canvas.toDataURL('image/jpeg', 0.78));
-      } catch (err) {
-        console.error(`Failed to generate thumbnail for ${pdfSrc}:`, err);
-      }
-    };
-
-    generateThumbnail();
-    return () => { cancelled = true; };
-  }, [pdfSrc, loadPriority]);
-
-  const prefetchPdf = () => {
-    if (getCachedPdf(pdfSrc)) return;
-    const existing = document.querySelector(`link[data-pdf-prefetch="${pdfSrc}"]`);
-    if (existing) return;
-    const link = document.createElement('link');
-    link.rel = 'prefetch';
-    link.href = pdfSrc;
-    link.as = 'fetch';
-    link.setAttribute('data-pdf-prefetch', pdfSrc);
-    document.head.appendChild(link);
+function ProspectusCard({ title, subtitle, pdfSrc, coverSrc, onClick, delay }) {
+  // Covers are pre-rendered (scripts/make-covers.py) — the landing page never
+  // touches the PDFs, so nothing competes with the viewer for bandwidth.
+  // Showing intent pulls the viewer chunk and the document ahead of the click.
+  const prefetch = () => {
+    import('./Flipbook');
+    warmPdf(pdfSrc);
   };
 
   return (
@@ -203,8 +135,8 @@ function ProspectusCard({ title, subtitle, pdfSrc, onClick, delay, loadPriority 
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.6, delay, ease: [0.16, 1, 0.3, 1] }}
       onClick={onClick}
-      onMouseEnter={prefetchPdf}
-      onFocus={prefetchPdf}
+      onMouseEnter={prefetch}
+      onFocus={prefetch}
       className="landing-book group text-left flex-none flex flex-col items-center gap-3 sm:gap-4"
     >
       <div
@@ -212,16 +144,16 @@ function ProspectusCard({ title, subtitle, pdfSrc, onClick, delay, loadPriority 
         style={{ aspectRatio: `${COVER_RATIO}` }}
       >
         <div className="landing-book__face absolute inset-0 overflow-hidden bg-slate-200">
-          {thumbnailUrl ? (
-            <img
-              src={thumbnailUrl}
-              alt={`${title} Cover`}
-              className="absolute inset-0 w-full h-full object-cover object-center"
-              draggable={false}
-            />
-          ) : (
-            <div className="absolute inset-0 animate-pulse bg-slate-200" />
-          )}
+          <img
+            src={coverSrc}
+            alt={`${title} Cover`}
+            width={1100}
+            height={778}
+            fetchPriority="high"
+            decoding="async"
+            className="absolute inset-0 w-full h-full object-cover object-center"
+            draggable={false}
+          />
 
           <div className="book-cover-depth" aria-hidden="true">
             <div className="book-cover-depth__spine" />

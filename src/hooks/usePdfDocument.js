@@ -30,7 +30,7 @@ const DEFAULT_ASPECT = 842 / 595;
  * Hook to load and cache a PDF document via pdfjs-dist.
  * Returns the document proxy, page count, loading state, and download progress.
  *
- * @param {string} pdfSrc - URL path to the PDF file (e.g., '/pdfs/UG26.pdf')
+ * @param {string} pdfSrc - URL path to the PDF file (e.g., '/pdfs/UG26.v2.pdf')
  */
 export function usePdfDocument(pdfSrc) {
   const [pdfDocument, setPdfDocument] = useState(null);
