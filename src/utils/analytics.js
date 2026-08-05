@@ -65,4 +65,5 @@ export const EVENTS = {
   THUMBNAIL_OPEN: 'thumbnail_open',
   SOUND_TOGGLE: 'sound_toggle',
   PROSPECTUS_SELECT: 'prospectus_select',
+  ROTATE_PROMPT_CLICK: 'rotate_prompt_click',
 };

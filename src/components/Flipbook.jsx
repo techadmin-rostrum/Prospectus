@@ -15,6 +15,7 @@ import PageCanvas from './PageCanvas';
 import LoadingSkeleton from './LoadingSkeleton';
 import Controls from './Controls';
 import ThumbnailStrip from './ThumbnailStrip';
+import RotatePhoneHint from './RotatePhoneHint';
 
 export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
   const navigate = useNavigate();
@@ -784,6 +785,9 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
           />
         )}
       </footer>
+
+      {/* Portrait phones only — tap tries landscape lock; hide once sideways */}
+      <RotatePhoneHint visible={isMobile && !isShortLandscape && !loading} />
 
       {!loading && (
         <ThumbnailStrip

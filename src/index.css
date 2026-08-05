@@ -1228,6 +1228,65 @@ body.flipbook-turning {
   height: 1.25rem;
 }
 
+/* Portrait-only “rotate your phone” — transparent SVG + swing */
+.flipbook-rotate-hint {
+  position: fixed;
+  left: max(0.45rem, env(safe-area-inset-left));
+  bottom: calc(4.35rem + env(safe-area-inset-bottom, 0px));
+  z-index: 36;
+  padding: 0.2rem;
+  margin: 0;
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.92);
+  cursor: pointer;
+  line-height: 0;
+  -webkit-tap-highlight-color: transparent;
+  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.45));
+}
+
+.flipbook-rotate-hint__swing {
+  display: block;
+  transform-origin: 50% 55%;
+  animation: flipbook-rotate-swing 2.4s ease-in-out infinite;
+}
+
+.flipbook-rotate-hint__svg {
+  display: block;
+  width: clamp(3.85rem, 19vw, 5.15rem);
+  height: auto;
+  pointer-events: none;
+  user-select: none;
+}
+
+@keyframes flipbook-rotate-swing {
+  0%,
+  100% {
+    transform: rotate(-14deg);
+  }
+  50% {
+    transform: rotate(14deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .flipbook-rotate-hint__swing {
+    animation: none;
+  }
+}
+
+@media (min-width: 768px) {
+  .flipbook-rotate-hint {
+    display: none;
+  }
+}
+
+@media (orientation: landscape) {
+  .flipbook-rotate-hint {
+    display: none;
+  }
+}
+
 @media (min-width: 480px) {
   .flipbook-controls-bar {
     padding: 4px !important;

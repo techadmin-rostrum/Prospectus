@@ -54,3 +54,37 @@ export function isFullscreenActive() {
 export function isPhoneViewport() {
   return typeof window !== 'undefined' && window.innerWidth < 768;
 }
+
+/**
+ * Ask the device to switch to landscape. Works on many Android browsers when
+ * already (or just becoming) fullscreen; iOS usually ignores lock — the
+ * rotate prompt still reminds the user to turn the phone by hand.
+ */
+export async function lockLandscape() {
+  if (typeof screen === 'undefined') return false;
+
+  await enterFullscreen();
+
+  const orientation = screen.orientation;
+  const lock =
+    orientation?.lock?.bind(orientation) ||
+    screen.lockOrientation?.bind(screen) ||
+    screen.mozLockOrientation?.bind(screen) ||
+    screen.msLockOrientation?.bind(screen);
+
+  if (!lock) return false;
+
+  try {
+    const result = lock('landscape');
+    await Promise.resolve(result);
+    return true;
+  } catch {
+    try {
+      const result = lock('landscape-primary');
+      await Promise.resolve(result);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
