@@ -7,7 +7,7 @@ import { usePdfDocument } from '../hooks/usePdfDocument';
 import { usePageRenderer } from '../hooks/usePageRenderer';
 import { useSound } from '../hooks/useSound';
 import { trackEvent, EVENTS } from '../utils/analytics';
-import { syncFlipCanvases } from '../utils/syncFlipCanvases';
+import { syncFlipCanvases, startFlipCanvasSync } from '../utils/syncFlipCanvases';
 import { flipBook, applyFlipDuration } from '../utils/flipBook';
 
 import PageCanvas from './PageCanvas';
@@ -46,6 +46,7 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
   const mobileSizeLockRef = useRef(null);
   const currentPageRef = useRef(0);
   currentPageRef.current = currentPage;
+  const stopCanvasSyncRef = useRef(null);
 
   // Interior turns. Cover open on mobile uses a custom door animation in flipBook.
   const PAGE_FLIP_MS = isMobile ? 1400 : 900;
@@ -241,18 +242,22 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
     mainRef.current?.classList.toggle('is-turning', e.data !== 'read');
     bookStageRef.current?.classList.toggle('is-flipping', flipping);
 
+    // Cover swings start one page before the cover itself (closing the back
+    // cover begins on the last interior page; opening the front begins on 1).
     const atCover =
-      currentPage === 0 || (numPages > 0 && currentPage === numPages - 1);
-    // Hard cover open needs real perspective — only while a cover is turning
-    // so soft interior curls stay flat/2D.
+      currentPage <= 1 || (numPages > 0 && currentPage >= numPages - 2);
     mainRef.current?.classList.toggle('is-cover-turning', flipping && atCover);
 
     setIsFlipping(flipping);
 
-    // Soft flips clone the page DOM without canvas pixels — copy them now.
+    // Soft flips clone the page DOM without canvas pixels — keep copying for
+    // the whole turn. A single rAF is too early; the first curl frames otherwise
+    // paint with an empty buffer (see-through page edges on mobile).
     if (turning) {
-      syncFlipCanvases();
-      requestAnimationFrame(() => syncFlipCanvases());
+      stopCanvasSyncRef.current?.();
+      stopCanvasSyncRef.current = startFlipCanvasSync(
+        bookStageRef.current || document
+      );
     }
 
     if (e.data === 'flipping') {
@@ -265,15 +270,51 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
     }
 
     if (e.data === 'read') {
+      stopCanvasSyncRef.current?.();
+      stopCanvasSyncRef.current = null;
+      syncFlipCanvases(bookStageRef.current || document);
       mainRef.current?.classList.remove('is-cover-turning');
+      // Crossing the cover/interior boundary makes page-flip force both pages
+      // to draw hard, and it never puts them back. Restore created density so
+      // the next soft turn curls like paper instead of a rigid board — but
+      // always keep the two covers hard so a later close can't soft-curl them.
+      const flip = bookRef.current?.pageFlip?.();
+      const count = flip?.getPageCount?.() ?? 0;
+      for (let i = 0; i < count; i++) {
+        const page = flip.getPage(i);
+        if (!page) continue;
+        if (i === 0 || i === count - 1) {
+          page.setDensity?.('hard');
+          page.setDrawingDensity?.('hard');
+        } else {
+          const created = page.getDensity?.();
+          if (created && page.getDrawingDensity?.() !== created) {
+            page.setDrawingDensity(created);
+          }
+        }
+      }
     }
   }, [currentPage, isMobile, playPageTurn, numPages]);
+
+  // react-pageflip constructs PageFlip once and never forwards later prop
+  // changes — write page-dependent guards onto the live settings object.
+  useEffect(() => {
+    const settings = bookRef.current?.pageFlip?.()?.getSettings?.();
+    if (!settings) return;
+    // Block library hard-flips on both covers (artwork vanishes). Our door
+    // animation + asDeliberateFlip handle arrows / keyboard instead.
+    const nearCover =
+      currentPage === 0 ||
+      (numPages > 0 && (currentPage === numPages - 1 || currentPage === numPages - 2));
+    settings.disableFlipByClick = isMobile && nearCover;
+  }, [isMobile, currentPage, loading, numPages, dimensions.width, dimensions.height, zoomLevel]);
 
   // Keep library flip duration in sync before the next turn starts.
   useEffect(() => {
     const flip = bookRef.current?.pageFlip?.();
     if (!flip || prefersReducedMotion) return;
-    const atCover = currentPage === 0 || (numPages > 0 && currentPage === numPages - 1);
+    const atCover =
+      currentPage <= 1 || (numPages > 0 && currentPage >= numPages - 2);
     applyFlipDuration(flip, atCover ? COVER_FLIP_MS : PAGE_FLIP_MS);
   }, [currentPage, prefersReducedMotion, loading, numPages, isMobile, COVER_FLIP_MS, PAGE_FLIP_MS]);
 
@@ -561,15 +602,15 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
                   minHeight={Math.min(400, pageH)}
                   maxHeight={Math.max(1533, pageH)}
                   drawShadow={true}
-                  maxShadowOpacity={isMobile ? 0.85 : 0.7}
+                  maxShadowOpacity={0.7}
                   showCover={true}
                   mobileScrollSupport={true}
-                  /* On mobile cover, block library hard-flip (image vanishes) —
-                     arrows / keyboard use our door-open instead. */
-                  useMouseEvents={!(isMobile && currentPage === 0)}
+                  /* These are read once at construction. Page-dependent cover
+                     guards are written onto the live settings object instead. */
+                  useMouseEvents={true}
                   showPageCorners={!isMobile}
-                  disableFlipByClick={isMobile && currentPage === 0}
-                  swipeDistance={isMobile && currentPage === 0 ? 99999 : isMobile ? 20 : 25}
+                  disableFlipByClick={isMobile}
+                  swipeDistance={isMobile ? 20 : 25}
                   clickEventForward={true}
                   className={singleCentered ? 'flip-shadow flip-shadow--cover' : 'flip-shadow'}
                   ref={bookRef}
@@ -615,8 +656,16 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
                       width={pageW}
                       height={pageH}
                       extraScale={1}
-                      priority={Math.abs(currentPage - i) <= 1 || (currentPage === 0 && i <= 1)}
-                      shouldRender={Math.abs(currentPage - i) <= 2 || (currentPage === 0 && i <= 2)}
+                      priority={
+                        Math.abs(currentPage - i) <= 1 ||
+                        (currentPage === 0 && i <= 1) ||
+                        (numPages > 0 && currentPage >= numPages - 2 && i >= numPages - 2)
+                      }
+                      shouldRender={
+                        Math.abs(currentPage - i) <= 3 ||
+                        (currentPage === 0 && i <= 3) ||
+                        (numPages > 0 && currentPage >= numPages - 3 && i >= numPages - 3)
+                      }
                     />
                   ))}
                 </HTMLFlipBook>

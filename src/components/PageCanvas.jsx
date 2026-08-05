@@ -69,7 +69,6 @@ const PageCanvas = React.forwardRef(function PageCanvas(
         height: `${height}px`,
         overflow: 'hidden',
         background: '#ffffff',
-        isolation: 'isolate',
       }}
     >
       <canvas

@@ -199,7 +199,28 @@ body {
 
 .flipbook-stage .cover-door-clone {
   transform-style: preserve-3d;
-  background: #fff !important;
+  background: transparent !important;
+}
+
+/* Two faces so a closing board stays visible for the whole swing. Without the
+   inner one, everything past 90° is a hidden backface and the cover vanishes. */
+.flipbook-stage .cover-door-face {
+  overflow: hidden;
+  border-radius: inherit;
+  background: #fff;
+}
+
+.flipbook-stage .cover-door-face--inside {
+  background:
+    linear-gradient(100deg, rgba(0, 0, 0, 0.16) 0%, rgba(0, 0, 0, 0) 12%),
+    linear-gradient(160deg, #fdfcfa 0%, #f2efe9 55%, #e8e4dc 100%);
+  box-shadow: inset 0 0 40px rgba(120, 105, 85, 0.16);
+}
+
+.flipbook-stage .cover-door-clone--right .cover-door-face--inside {
+  background:
+    linear-gradient(-100deg, rgba(0, 0, 0, 0.16) 0%, rgba(0, 0, 0, 0) 12%),
+    linear-gradient(200deg, #fdfcfa 0%, #f2efe9 55%, #e8e4dc 100%);
 }
 
 .flipbook-stage .cover-door-clone canvas {

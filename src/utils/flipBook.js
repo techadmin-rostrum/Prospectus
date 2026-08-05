@@ -4,13 +4,16 @@
  * page-flip's flipNext/flipPrev use window-space y ≈ 1 / pageHeight, which
  * breaks when the book is vertically centered (common on mobile).
  *
- * Portrait hard covers are special: page-flip's rotateY math is landscape-
- * oriented, so the cover image vanishes while only the shadow animates.
- * We run our own door-open for opening the front cover on portrait.
+ * Portrait covers are special: page-flip's hard rotateY math is landscape-
+ * oriented, and it hides the back face of a hard page, so half of every cover
+ * swing renders as nothing. We run our own two-faced door instead for every
+ * cover transition (front open/close, back open/close).
  */
-import { syncFlipCanvases } from './syncFlipCanvases';
+import { syncFlipCanvases, startFlipCanvasSync } from './syncFlipCanvases';
 
 let coverAnimLock = false;
+let coverAnimLockUntil = 0;
+let stopSoftSync = null;
 const COVER_DOOR_MS = 2600;
 
 /**
@@ -30,6 +33,26 @@ export function applyFlipDuration(pageFlip, targetMs) {
       : Math.ceil(targetMs * (1000 / pathEstimate));
 }
 
+/**
+ * react-pageflip builds PageFlip once and never forwards later prop changes,
+ * so disableFlipByClick still holds whatever the book mounted with. Lift it
+ * for the duration of a flip we asked for ourselves.
+ */
+function asDeliberateFlip(pageFlip, run) {
+  const settings = pageFlip?.getSettings?.();
+  if (!settings) {
+    run();
+    return;
+  }
+  const guarded = settings.disableFlipByClick;
+  settings.disableFlipByClick = false;
+  try {
+    run();
+  } finally {
+    settings.disableFlipByClick = guarded;
+  }
+}
+
 function copyCanvasPixels(fromEl, toEl) {
   const src = fromEl.querySelector?.('canvas');
   const dst = toEl.querySelector?.('canvas');
@@ -45,55 +68,123 @@ function copyCanvasPixels(fromEl, toEl) {
   ctx.drawImage(src, 0, 0);
 }
 
+const FACE_CSS = [
+  'position:absolute',
+  'left:0',
+  'top:0',
+  'width:100%',
+  'height:100%',
+  'margin:0',
+  'display:block',
+  'backface-visibility:hidden',
+  '-webkit-backface-visibility:hidden',
+].join(';');
+
 /**
- * Portrait front-cover door open. Clones the cover, reveals page 1 underneath,
- * then swings the clone open like a hard cover.
+ * Swing a portrait cover like a hard board.
+ *
+ * Front cover hinges on the left (opens to -180°); back cover hinges on the
+ * right (opens to +180°) — opposite directions, like a real book.
+ *
+ * `opening` reveals the target page as the cover rotates away; closing brings
+ * the cover down over what's on screen and lands on the target afterwards.
+ *
+ * Returns:
+ *   'ok'     — animation started
+ *   'busy'   — another cover door is already running (caller must NOT soft-flip)
+ *   'fail'   — couldn't build the door (caller should instant-turn, not soft-flip)
  */
-function animatePortraitCoverOpen(pageFlip) {
-  if (coverAnimLock || !pageFlip) return;
-
-  const cover = pageFlip.getPage?.(0);
-  const el = cover?.getElement?.();
-  if (!el) {
-    pageFlip.flipNext?.('bottom');
-    return;
+function animateCoverDoor(pageFlip, { coverIndex, targetIndex, opening, hinge = 'left' }) {
+  if (!pageFlip) return 'fail';
+  if (coverAnimLock) {
+    // A live door is running — swallow the click so we never soft-curl a cover.
+    if (Date.now() < coverAnimLockUntil) return 'busy';
+    // Stale lock (finish never ran) — clean up and continue.
+    coverAnimLock = false;
+    document.querySelectorAll('.cover-door-clone').forEach((el) => el.remove());
   }
 
-  const stage = el.closest('.flipbook-stage');
-  const main = el.closest('.flipbook-main');
-  const perspectiveHost = el.closest('.flipbook-perspective') || stage;
-  if (!stage) {
-    pageFlip.flipNext?.('bottom');
-    return;
+  const nowIndex = pageFlip.getCurrentPageIndex?.() ?? 0;
+  let coverEl;
+  let measureEl;
+  try {
+    coverEl = pageFlip.getPage(coverIndex)?.getElement?.();
+    // Closing clones a still-hidden cover, so measure the page on screen.
+    measureEl = pageFlip.getPage(nowIndex)?.getElement?.();
+  } catch {
+    return 'fail';
   }
+  const stage = measureEl?.closest?.('.flipbook-stage');
+  if (!coverEl || !measureEl || !stage) return 'fail';
+
+  const box = measureEl.getBoundingClientRect();
+  if (!box.width || !box.height) return 'fail';
+
+  const main = measureEl.closest('.flipbook-main');
+  const perspectiveHost = measureEl.closest('.flipbook-perspective') || stage;
+  const stageBox = stage.getBoundingClientRect();
+
+  // Left hinge (front): closed 0 → open -180. Right hinge (back): closed 0 → open +180.
+  const openAngle = hinge === 'right' ? 180 : -180;
+  const startAngle = opening ? 0 : openAngle;
+  const endAngle = opening ? openAngle : 0;
+  const origin = hinge === 'right' ? 'right center' : 'left center';
+  const shadow =
+    hinge === 'right'
+      ? '2px 0 10px rgba(0,0,0,0.18), -8px 12px 28px rgba(0,0,0,0.22)'
+      : '-2px 0 10px rgba(0,0,0,0.18), 8px 12px 28px rgba(0,0,0,0.22)';
+
+  // Drop any leftover clone from a prior interrupted run so we never stack doors.
+  stage.querySelectorAll('.cover-door-clone').forEach((el) => el.remove());
 
   coverAnimLock = true;
+  coverAnimLockUntil = Date.now() + COVER_DOOR_MS + 500;
   syncFlipCanvases();
 
-  const elRect = el.getBoundingClientRect();
-  const stageRect = stage.getBoundingClientRect();
+  // page-flip sets hidden pages to cssText="display:none", which is fine for
+  // canvas pixels, but make sure density stays hard so a later soft path can't
+  // steal the cover.
+  try {
+    const coverPage = pageFlip.getPage(coverIndex);
+    coverPage?.setDensity?.('hard');
+    coverPage?.setDrawingDensity?.('hard');
+  } catch {
+    /* ignore */
+  }
 
-  const clone = el.cloneNode(true);
-  clone.classList.add('cover-door-clone');
-  copyCanvasPixels(el, clone);
+  const front = coverEl.cloneNode(true);
+  front.classList.add('cover-door-face');
+  front.style.cssText = FACE_CSS;
+  copyCanvasPixels(coverEl, front);
 
-  clone.style.cssText = [
+  const door = document.createElement('div');
+  door.className = `cover-door-clone cover-door-clone--${hinge}`;
+  door.style.cssText = [
     'position:absolute',
-    `left:${elRect.left - stageRect.left}px`,
-    `top:${elRect.top - stageRect.top}px`,
-    `width:${elRect.width}px`,
-    `height:${elRect.height}px`,
+    `left:${box.left - stageBox.left}px`,
+    `top:${box.top - stageBox.top}px`,
+    `width:${box.width}px`,
+    `height:${box.height}px`,
     'margin:0',
     'z-index:40',
     'display:block',
-    'transform-origin:left center',
-    'backface-visibility:hidden',
-    '-webkit-backface-visibility:hidden',
+    `transform-origin:${origin}`,
+    'transform-style:preserve-3d',
     'transition:none',
-    'transform:rotateY(0deg)',
-    'box-shadow: -2px 0 10px rgba(0,0,0,0.18), 8px 12px 28px rgba(0,0,0,0.22)',
+    `transform:rotateY(${startAngle}deg)`,
+    `box-shadow: ${shadow}`,
     'pointer-events:none',
   ].join(';');
+  door.append(front);
+
+  // Closing starts face-away: without a second face the board is invisible for
+  // the first half of its arc (backface-hidden) and looks like it teleports in.
+  if (!opening) {
+    const inside = document.createElement('div');
+    inside.className = 'cover-door-face cover-door-face--inside';
+    inside.style.cssText = `${FACE_CSS};transform:rotateY(180deg)`;
+    door.append(inside);
+  }
 
   main?.classList.add('is-turning', 'is-cover-turning');
   stage.classList.add('is-flipping', 'cover-door-animating');
@@ -102,17 +193,24 @@ function animatePortraitCoverOpen(pageFlip) {
     perspectiveHost.style.webkitPerspective = '1600px';
   }
 
-  stage.appendChild(clone);
+  stage.appendChild(door);
   pageFlip.updateState?.('flipping');
-  // Page 1 sits under the swinging cover
-  pageFlip.turnToPage?.(1);
+  // Opening reveals the target underneath; closing keeps the current page
+  // visible and lands on the target once the board is down.
+  if (opening) {
+    try {
+      pageFlip.turnToPage?.(targetIndex);
+    } catch {
+      /* keep animating — finish will still unlock */
+    }
+  }
 
-  void clone.offsetWidth;
-  clone.style.transition = `transform ${COVER_DOOR_MS}ms cubic-bezier(0.22, 0.82, 0.28, 1)`;
+  void door.offsetWidth;
+  door.style.transition = `transform ${COVER_DOOR_MS}ms cubic-bezier(0.22, 0.82, 0.28, 1)`;
 
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
-      clone.style.transform = 'rotateY(-180deg)';
+      door.style.transform = `rotateY(${endAngle}deg)`;
     });
   });
 
@@ -120,25 +218,66 @@ function animatePortraitCoverOpen(pageFlip) {
   const finish = () => {
     if (finished) return;
     finished = true;
-    clone.remove();
+    try {
+      if (!opening) pageFlip.turnToPage?.(targetIndex);
+    } catch {
+      /* ignore */
+    }
+    try {
+      door.remove();
+    } catch {
+      /* ignore */
+    }
     if (perspectiveHost) {
       perspectiveHost.style.perspective = '';
       perspectiveHost.style.webkitPerspective = '';
     }
     stage.classList.remove('cover-door-animating', 'is-flipping');
     main?.classList.remove('is-turning', 'is-cover-turning');
-    pageFlip.updateState?.('read');
+    try {
+      pageFlip.updateState?.('read');
+    } catch {
+      /* ignore */
+    }
     coverAnimLock = false;
   };
 
   const onEnd = (e) => {
-    if (e.target !== clone) return;
+    if (e.target !== door) return;
     if (e.propertyName && e.propertyName !== 'transform') return;
-    clone.removeEventListener('transitionend', onEnd);
+    door.removeEventListener('transitionend', onEnd);
     finish();
   };
-  clone.addEventListener('transitionend', onEnd);
+  door.addEventListener('transitionend', onEnd);
   setTimeout(finish, COVER_DOOR_MS + 120);
+  return 'ok';
+}
+
+/**
+ * Which cover swing, if any, this move represents in portrait.
+ * Returns null for ordinary interior turns.
+ */
+function coverDoorFor(idx, lastIndex, direction) {
+  if (direction === 'next') {
+    // Front cover opening — hinge left
+    if (idx === 0) {
+      return { coverIndex: 0, targetIndex: 1, opening: true, hinge: 'left' };
+    }
+    // Back cover closing onto the last page — hinge right (opposite)
+    if (idx === lastIndex - 1) {
+      return { coverIndex: lastIndex, targetIndex: lastIndex, opening: false, hinge: 'right' };
+    }
+  } else {
+    // Front cover closing — hinge left
+    if (idx === 1) {
+      return { coverIndex: 0, targetIndex: 0, opening: false, hinge: 'left' };
+    }
+    // Back cover opening (leaving the last page) — hinge right
+    if (idx === lastIndex) {
+      return { coverIndex: lastIndex, targetIndex: lastIndex - 1, opening: true, hinge: 'right' };
+    }
+  }
+  return null;
 }
 
 export function flipBook(pageFlip, direction = 'next') {
@@ -151,16 +290,27 @@ export function flipBook(pageFlip, direction = 'next') {
   const rect = render?.getRect?.();
   const isPortrait = render?.getOrientation?.() === 'portrait';
   const idx = pageFlip.getCurrentPageIndex?.() ?? 0;
+  const lastIndex = (pageFlip.getPageCount?.() ?? 1) - 1;
 
-  // Portrait front cover: custom door-open (library hard-flip drops the image)
-  if (isPortrait && direction === 'next' && idx === 0) {
-    animatePortraitCoverOpen(pageFlip);
-    return;
+  if (isPortrait && lastIndex >= 1) {
+    const door = coverDoorFor(idx, lastIndex, direction);
+    if (door) {
+      const result = animateCoverDoor(pageFlip, door);
+      // Cover transitions must never soft-curl. If a door is already running,
+      // ignore the click; if we couldn't build one, jump instantly.
+      if (result === 'ok' || result === 'busy') return;
+      try {
+        pageFlip.turnToPage?.(door.targetIndex);
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
   }
 
   if (isPortrait) {
     applyFlipDuration(pageFlip, 1400);
-  } else if (idx === 0) {
+  } else if (idx === 0 || idx >= lastIndex - 1) {
     applyFlipDuration(pageFlip, 1200);
   }
 
@@ -177,12 +327,16 @@ export function flipBook(pageFlip, direction = 'next') {
       x = rect.left + rect.width - inset;
     }
 
-    controller.flip({ x, y });
-    requestAnimationFrame(() => syncFlipCanvases());
+    asDeliberateFlip(pageFlip, () => controller.flip({ x, y }));
+    stopSoftSync?.();
+    stopSoftSync = startFlipCanvasSync(document);
     return;
   }
 
-  if (direction === 'prev') pageFlip.flipPrev('bottom');
-  else pageFlip.flipNext('bottom');
-  requestAnimationFrame(() => syncFlipCanvases());
+  asDeliberateFlip(pageFlip, () => {
+    if (direction === 'prev') pageFlip.flipPrev('bottom');
+    else pageFlip.flipNext('bottom');
+  });
+  stopSoftSync?.();
+  stopSoftSync = startFlipCanvasSync(document);
 }
