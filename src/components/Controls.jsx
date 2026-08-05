@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { trackEvent, EVENTS } from '../utils/analytics';
 import { flipBook, isFlipBookBusy } from '../utils/flipBook';
-import { enterFullscreen, exitFullscreen, isFullscreenActive } from '../utils/fullscreen';
+import { toggleImmersive, isFullscreenActive } from '../utils/fullscreen';
 
 const ARROW_IDLE_MS = 5000;
 
@@ -121,21 +121,15 @@ export default function Controls({
   }, [currentPage]);
 
   const toggleFullscreen = () => {
-    if (!isFullscreenActive()) {
-      enterFullscreen().then((ok) => {
-        if (ok) {
-          setIsFullscreen(true);
-          trackEvent(EVENTS.FULLSCREEN_TOGGLE, { state: 'enter' });
-        }
+    const entering = !isFullscreenActive();
+    toggleImmersive().then((active) => {
+      setIsFullscreen(active);
+      trackEvent(EVENTS.FULLSCREEN_TOGGLE, {
+        state: active ? 'enter' : 'exit',
+        // iOS uses immersive layout; Android uses real fullscreen
+        mode: entering && active ? 'maximize' : 'restore',
       });
-    } else {
-      exitFullscreen().then((ok) => {
-        if (ok) {
-          setIsFullscreen(false);
-          trackEvent(EVENTS.FULLSCREEN_TOGGLE, { state: 'exit' });
-        }
-      });
-    }
+    });
   };
 
   useEffect(() => {
@@ -318,7 +312,7 @@ export default function Controls({
             />
             <IconButton
               icon={isFullscreen ? <IconMinimize /> : <IconMaximize />}
-              label={isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
+              label={isFullscreen ? 'Exit maximize' : 'Maximize'}
               onClick={toggleFullscreen}
             />
           </motion.div>

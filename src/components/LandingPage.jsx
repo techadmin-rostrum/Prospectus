@@ -1,18 +1,31 @@
+import { useEffect } from 'react';
 import { useNavigate } from 'react-router';
 import { motion } from 'motion/react';
 import { warmPdf } from '../utils/warmPdf';
-import { enterFullscreen, isPhoneViewport } from '../utils/fullscreen';
+import { enterImmersive, isPhoneViewport, syncAppHeight } from '../utils/fullscreen';
+import { unlockFlipbookAudio } from '../hooks/useSound';
 
 const COVER_RATIO = 842 / 595;
 
 export default function LandingPage() {
   const navigate = useNavigate();
 
+  useEffect(() => {
+    syncAppHeight();
+    const onResize = () => syncAppHeight();
+    window.addEventListener('resize', onResize);
+    window.visualViewport?.addEventListener('resize', onResize);
+    return () => {
+      window.removeEventListener('resize', onResize);
+      window.visualViewport?.removeEventListener('resize', onResize);
+    };
+  }, []);
+
   const openProspectus = (path) => {
-    // Enter fullscreen in the same tap that opens the book — browsers only
-    // allow this inside a user gesture, and it hides the mobile Chrome bar.
+    // Same user gesture: unlock iOS audio + maximize layout, then navigate.
+    unlockFlipbookAudio();
     if (isPhoneViewport()) {
-      enterFullscreen();
+      enterImmersive();
     }
     navigate(path);
   };

@@ -20,7 +20,10 @@
       download with the bundle instead of queueing behind it.
     -->
     <link rel="preload" href="/pdfjs-dist/build/pdf.worker.min.mjs" as="worker" />
-    
+    <!-- Warm page-turn sounds so iOS can unlock + play on first gesture -->
+    <link rel="preload" href="/sounds/page-turn.mp3" as="audio" type="audio/mpeg" />
+    <link rel="preload" href="/sounds/cover-turn.mp3" as="audio" type="audio/mpeg" />
+
     <title>Rostrum Education — Prospectus</title>
   </head>
   <body>

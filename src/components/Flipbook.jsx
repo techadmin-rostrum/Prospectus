@@ -9,7 +9,12 @@ import { useSound } from '../hooks/useSound';
 import { trackEvent, EVENTS } from '../utils/analytics';
 import { syncFlipCanvases, startFlipCanvasSync } from '../utils/syncFlipCanvases';
 import { flipBook, applyFlipDuration, isFlipBookBusy } from '../utils/flipBook';
-import { enterFullscreen, isFullscreenActive, isPhoneViewport } from '../utils/fullscreen';
+import {
+  enterImmersive,
+  isFullscreenActive,
+  isPhoneViewport,
+  syncAppHeight,
+} from '../utils/fullscreen';
 
 import PageCanvas from './PageCanvas';
 import LoadingSkeleton from './LoadingSkeleton';
@@ -27,7 +32,7 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
 
   const { pdfDocument, numPages, loading, progress, error, aspectRatio } = usePdfDocument(pdfSrc);
   const { evictCache, clearCache } = usePageRenderer();
-  const { isMuted, toggleMute, playPageTurn, playCoverTurn } = useSound();
+  const { isMuted, toggleMute, playPageTurn, playCoverTurn, unlockAudio } = useSound();
 
   const [currentPage, setCurrentPage] = useState(0);
   const [isCoverView, setIsCoverView] = useState(true);
@@ -197,18 +202,32 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
     return () => clearTimeout(t);
   }, [loading, isMobile, dimensions.width, dimensions.height]);
 
-  // Mobile: enter fullscreen so Chrome's toolbar doesn't eat the book.
-  // Prefer the landing-page tap (already fullscreen); otherwise use the first
-  // touch on the viewer. Browsers require a user gesture for this API.
+  // Keep shell height locked to the *visible* viewport (iOS Safari URL bar).
+  useEffect(() => {
+    syncAppHeight();
+    const onResize = () => syncAppHeight();
+    window.addEventListener('resize', onResize);
+    window.visualViewport?.addEventListener('resize', onResize);
+    window.visualViewport?.addEventListener('scroll', onResize);
+    return () => {
+      window.removeEventListener('resize', onResize);
+      window.visualViewport?.removeEventListener('resize', onResize);
+      window.visualViewport?.removeEventListener('scroll', onResize);
+    };
+  }, []);
+
+  // Mobile: maximize on first gesture. Android → Fullscreen API; iOS → immersive
+  // layout (Safari has no page fullscreen). Same tap also unlocks audio.
   useEffect(() => {
     if (!isMobile && !isPhoneViewport()) return;
     if (isFullscreenActive()) return;
 
     let armed = true;
     const tryEnter = () => {
-      if (!armed || isFullscreenActive()) return;
+      if (!armed) return;
       armed = false;
-      enterFullscreen();
+      unlockAudio();
+      if (!isFullscreenActive()) enterImmersive();
       window.removeEventListener('pointerdown', tryEnter);
       window.removeEventListener('touchstart', tryEnter);
     };
@@ -220,7 +239,7 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
       window.removeEventListener('pointerdown', tryEnter);
       window.removeEventListener('touchstart', tryEnter);
     };
-  }, [isMobile]);
+  }, [isMobile, unlockAudio]);
 
   useEffect(() => {
     if (!bookRef.current || !bookRef.current.pageFlip) return;
@@ -507,7 +526,7 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
 
   return (
     <div
-      className={`flipbook-shell flipbook-shell--${theme} h-dvh max-h-dvh flex flex-col relative overflow-hidden`}
+      className={`flipbook-shell flipbook-shell--${theme} flex flex-col relative overflow-hidden`}
     >
       <div
         className="absolute inset-0 pointer-events-none select-none overflow-hidden z-0"

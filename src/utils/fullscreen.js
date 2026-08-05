@@ -1,10 +1,54 @@
 /**
+ * Fullscreen / immersive helpers.
+ *
+ * Android Chrome: real Fullscreen API + orientation.lock work.
+ * iOS Safari: those APIs are unavailable for web pages — we approximate
+ * with visualViewport sizing + a scroll trick to minimize the browser chrome.
+ */
+
+export function isIOS() {
+  if (typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent || '';
+  if (/iPad|iPhone|iPod/.test(ua)) return true;
+  // iPadOS 13+ reports as Mac with touch
+  return navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1;
+}
+
+export function canUseFullscreenAPI() {
+  if (typeof document === 'undefined') return false;
+  // iOS Safari exposes webkitEnterFullscreen only on <video>, not on html/body
+  if (isIOS()) return false;
+  const el = document.documentElement;
+  return !!(
+    el.requestFullscreen ||
+    el.webkitRequestFullscreen ||
+    el.webkitRequestFullScreen ||
+    el.msRequestFullscreen
+  );
+}
+
+export function isPhoneViewport() {
+  return typeof window !== 'undefined' && window.innerWidth < 768;
+}
+
+/** Sync layout height to the *visible* viewport (critical on iOS Safari). */
+export function syncAppHeight() {
+  if (typeof window === 'undefined') return;
+  const vv = window.visualViewport;
+  const h = Math.round(vv?.height || window.innerHeight);
+  const w = Math.round(vv?.width || window.innerWidth);
+  document.documentElement.style.setProperty('--app-height', `${h}px`);
+  document.documentElement.style.setProperty('--app-width', `${w}px`);
+}
+
+/**
  * Enter / exit browser fullscreen. Required for hiding the mobile Chrome
  * toolbar. Must run inside a user-gesture handler (tap/click).
  * Returns true if the request was accepted.
  */
 export function enterFullscreen(el = document.documentElement) {
   if (typeof document === 'undefined') return Promise.resolve(false);
+  if (!canUseFullscreenAPI()) return Promise.resolve(false);
   if (document.fullscreenElement || document.webkitFullscreenElement) {
     return Promise.resolve(true);
   }
@@ -47,23 +91,74 @@ export function exitFullscreen() {
 }
 
 export function isFullscreenActive() {
-  return !!(document.fullscreenElement || document.webkitFullscreenElement);
-}
-
-/** True for phone-sized viewports (matches Flipbook isMobile). */
-export function isPhoneViewport() {
-  return typeof window !== 'undefined' && window.innerWidth < 768;
+  if (typeof document === 'undefined') return false;
+  if (document.fullscreenElement || document.webkitFullscreenElement) return true;
+  // iOS "immersive" stand-in
+  return document.documentElement.classList.contains('flipbook-immersive');
 }
 
 /**
- * Ask the device to switch to landscape. Works on many Android browsers when
- * already (or just becoming) fullscreen; iOS usually ignores lock — the
- * rotate prompt still reminds the user to turn the phone by hand.
+ * Best-effort maximize on the current platform.
+ * Android → real fullscreen. iOS → immersive layout (no API available).
+ */
+export async function enterImmersive() {
+  if (canUseFullscreenAPI()) {
+    const ok = await enterFullscreen();
+    if (ok) return 'fullscreen';
+  }
+
+  // iOS / unsupported: pin height to visual viewport & nudge Safari chrome up
+  document.documentElement.classList.add('flipbook-immersive');
+  document.body.classList.add('flipbook-immersive');
+  syncAppHeight();
+  try {
+    window.scrollTo(0, 1);
+  } catch {
+    /* ignore */
+  }
+  // Second tick after Safari settles
+  requestAnimationFrame(() => {
+    syncAppHeight();
+    try {
+      window.scrollTo(0, 1);
+    } catch {
+      /* ignore */
+    }
+  });
+  return 'immersive';
+}
+
+export async function exitImmersive() {
+  if (canUseFullscreenAPI() && (document.fullscreenElement || document.webkitFullscreenElement)) {
+    await exitFullscreen();
+  }
+  document.documentElement.classList.remove('flipbook-immersive');
+  document.body.classList.remove('flipbook-immersive');
+  syncAppHeight();
+  return true;
+}
+
+export async function toggleImmersive() {
+  if (isFullscreenActive()) {
+    await exitImmersive();
+    return false;
+  }
+  await enterImmersive();
+  return true;
+}
+
+/**
+ * Ask the device to switch to landscape.
+ * Android (fullscreen): orientation.lock often works.
+ * iOS: lock is unsupported — returns false so UI can nudge the user.
  */
 export async function lockLandscape() {
   if (typeof screen === 'undefined') return false;
 
-  await enterFullscreen();
+  // Always try immersive first so the layout uses max space
+  await enterImmersive();
+
+  if (isIOS()) return false;
 
   const orientation = screen.orientation;
   const lock =
@@ -75,13 +170,11 @@ export async function lockLandscape() {
   if (!lock) return false;
 
   try {
-    const result = lock('landscape');
-    await Promise.resolve(result);
+    await Promise.resolve(lock('landscape'));
     return true;
   } catch {
     try {
-      const result = lock('landscape-primary');
-      await Promise.resolve(result);
+      await Promise.resolve(lock('landscape-primary'));
       return true;
     } catch {
       return false;

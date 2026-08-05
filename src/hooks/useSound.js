@@ -2,15 +2,78 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 
 const MUTE_KEY = 'flipbook-muted';
 
+let sharedPageAudio = null;
+let sharedCoverAudio = null;
+let sharedUnlocked = false;
+
+function getSharedAudio() {
+  if (typeof Audio === 'undefined') return { page: null, cover: null };
+  if (!sharedPageAudio) {
+    sharedPageAudio = new Audio('/sounds/page-turn.mp3?v=4');
+    sharedPageAudio.preload = 'auto';
+    sharedPageAudio.setAttribute('playsinline', '');
+    try {
+      sharedPageAudio.load();
+    } catch {
+      /* ignore */
+    }
+  }
+  if (!sharedCoverAudio) {
+    sharedCoverAudio = new Audio('/sounds/cover-turn.mp3?v=4');
+    sharedCoverAudio.preload = 'auto';
+    sharedCoverAudio.setAttribute('playsinline', '');
+    try {
+      sharedCoverAudio.load();
+    } catch {
+      /* ignore */
+    }
+  }
+  return { page: sharedPageAudio, cover: sharedCoverAudio };
+}
+
 /**
- * Real recorded page-turn sounds — played at natural pitch, same way.
+ * Call from any user gesture (landing tap, first touch). Unlocks iOS Safari
+ * so later page-flip play() calls succeed without a fresh gesture.
+ */
+export function unlockFlipbookAudio() {
+  if (sharedUnlocked || typeof window === 'undefined') return;
+  const { page, cover } = getSharedAudio();
+
+  const kick = (el) => {
+    if (!el) return Promise.resolve();
+    el.muted = true;
+    el.volume = 0;
+    const p = el.play();
+    if (p && typeof p.then === 'function') {
+      return p
+        .then(() => {
+          el.pause();
+          el.currentTime = 0;
+          el.muted = false;
+          el.volume = 1;
+        })
+        .catch(() => {
+          el.muted = false;
+          el.volume = 1;
+        });
+    }
+    el.pause();
+    el.currentTime = 0;
+    el.muted = false;
+    el.volume = 1;
+    return Promise.resolve();
+  };
+
+  Promise.all([kick(page), kick(cover)]).then(() => {
+    sharedUnlocked = true;
+  });
+}
+
+/**
+ * Page / cover turn sounds via HTMLAudioElement.
  *
- *   /sounds/page-turn.mp3  — interior leaf
- *   /sounds/cover-turn.mp3 — cover open/close (user-provided)
- *
- * Never speed clips up to "fit" the flip (that makes paper sound sharp).
- * Cover clips are shorter than the swing — they start late so the sound
- * finishes with the cover landing (same natural pitch as page turns).
+ * iOS Safari blocks audio until a gesture. HTMLAudio + early unlock on first
+ * tap is reliable on both iPhone and Android (Web Audio + await was silent).
  */
 export function useSound() {
   const [isMuted, setIsMuted] = useState(() => {
@@ -21,126 +84,87 @@ export function useSound() {
     }
   });
 
-  const audioCtxRef = useRef(null);
-  const buffersRef = useRef({ page: null, cover: null });
-  const loadPromiseRef = useRef(null);
+  const coverTimerRef = useRef(null);
   const prefersReducedMotion = useRef(
     typeof window !== 'undefined' &&
     window.matchMedia('(prefers-reduced-motion: reduce)').matches
   );
 
-  const getAudioContext = useCallback(() => {
-    if (!audioCtxRef.current) {
-      audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
-    }
-    const ctx = audioCtxRef.current;
-    if (ctx.state === 'suspended') ctx.resume();
-    return ctx;
+  const unlockAudio = useCallback(() => {
+    unlockFlipbookAudio();
   }, []);
 
-  const ensureLoaded = useCallback(async () => {
-    if (buffersRef.current.page && buffersRef.current.cover) {
-      return buffersRef.current;
-    }
-    if (loadPromiseRef.current) return loadPromiseRef.current;
-
-    loadPromiseRef.current = (async () => {
-      const ctx = getAudioContext();
-      const loadOne = async (url) => {
-        // Cache-bust so a replaced cover-turn.mp3 is picked up after refresh
-        const res = await fetch(`${url}?v=3`);
-        if (!res.ok) throw new Error(`Failed to load ${url}`);
-        const raw = await res.arrayBuffer();
-        return ctx.decodeAudioData(raw.slice(0));
-      };
-
-      const [page, cover] = await Promise.all([
-        loadOne('/sounds/page-turn.mp3'),
-        loadOne('/sounds/cover-turn.mp3'),
-      ]);
-      buffersRef.current = { page, cover };
-      return buffersRef.current;
-    })().catch((err) => {
-      loadPromiseRef.current = null;
-      console.warn('[useSound] Could not load page-turn samples:', err);
-      return null;
-    });
-
-    return loadPromiseRef.current;
-  }, [getAudioContext]);
-
   useEffect(() => {
-    const warm = () => {
-      ensureLoaded();
-    };
-    window.addEventListener('pointerdown', warm, { once: true });
+    // Warm elements early; unlock still needs a gesture
+    getSharedAudio();
+    const warm = () => unlockFlipbookAudio();
+    window.addEventListener('pointerdown', warm, { once: true, passive: true });
+    window.addEventListener('touchstart', warm, { once: true, passive: true });
     window.addEventListener('keydown', warm, { once: true });
     return () => {
       window.removeEventListener('pointerdown', warm);
+      window.removeEventListener('touchstart', warm);
       window.removeEventListener('keydown', warm);
     };
-  }, [ensureLoaded]);
+  }, []);
 
-  const playBuffer = useCallback(
-    async (kind, durationMs) => {
+  const playClip = useCallback(
+    (kind, durationMs) => {
       if (isMuted || prefersReducedMotion.current) return;
 
-      try {
-        const buffers = await ensureLoaded();
-        if (!buffers) return;
+      unlockFlipbookAudio();
+      const { page, cover } = getSharedAudio();
+      const el = kind === 'cover' ? cover : page;
+      if (!el) return;
 
-        const buffer = kind === 'cover' ? buffers.cover : buffers.page;
-        if (!buffer) return;
+      if (coverTimerRef.current) {
+        clearTimeout(coverTimerRef.current);
+        coverTimerRef.current = null;
+      }
 
-        const ctx = getAudioContext();
-        const natural = buffer.duration || 1;
-        const flipSec = Math.max(0.35, (durationMs || 900) / 1000);
-        const now = ctx.currentTime;
+      const natural =
+        el.duration && Number.isFinite(el.duration)
+          ? el.duration
+          : kind === 'cover'
+            ? 0.7
+            : 1.2;
+      const flipSec = Math.max(0.35, (durationMs || 900) / 1000);
 
-        // Natural pitch for both — never speed up (sounds sharp).
-        // Cover flips are longer than the clip: delay so the sound *ends*
-        // with the cover landing, instead of finishing mid-swing.
-        let startDelay = 0;
-        if (kind === 'cover' && flipSec > natural) {
-          startDelay = flipSec - natural;
+      let delayMs = 0;
+      if (kind === 'cover' && flipSec > natural) {
+        delayMs = Math.round((flipSec - natural) * 1000);
+      }
+
+      const start = () => {
+        try {
+          el.pause();
+          el.currentTime = 0;
+          el.muted = false;
+          el.volume = kind === 'cover' ? 0.85 : 0.75;
+          const p = el.play();
+          if (p && typeof p.catch === 'function') p.catch(() => {});
+        } catch {
+          /* ignore */
         }
+      };
 
-        const source = ctx.createBufferSource();
-        source.buffer = buffer;
-        source.playbackRate.value = 1;
-
-        const gain = ctx.createGain();
-        const peak = 0.5;
-        const t0 = now + startDelay;
-
-        gain.gain.setValueAtTime(0.0001, t0);
-        gain.gain.linearRampToValueAtTime(peak, t0 + 0.025);
-        gain.gain.setValueAtTime(peak, t0 + Math.max(0.05, natural - 0.1));
-        gain.gain.exponentialRampToValueAtTime(0.0001, t0 + natural);
-
-        source.connect(gain);
-        gain.connect(ctx.destination);
-        source.start(t0);
-        source.stop(t0 + natural + 0.03);
-      } catch {
-        // Audio not supported / autoplay blocked — ignore
+      if (delayMs > 0) {
+        coverTimerRef.current = setTimeout(start, delayMs);
+      } else {
+        start();
       }
     },
-    [isMuted, ensureLoaded, getAudioContext]
+    [isMuted]
   );
 
   const playPageTurn = useCallback(
-    (durationMs = 900) => {
-      playBuffer('page', durationMs);
-    },
-    [playBuffer]
+    (durationMs = 900) => playClip('page', durationMs),
+    [playClip]
   );
 
   const playCoverTurn = useCallback(
-    (durationMs = 1200) => {
-      playBuffer('cover', durationMs);
-    },
-    [playBuffer]
+    (durationMs = 1200) => playClip('cover', durationMs),
+    [playClip]
   );
 
   const toggleMute = useCallback(() => {
@@ -151,28 +175,16 @@ export function useSound() {
       } catch {
         /* private mode */
       }
-      if (!next) {
-        try {
-          getAudioContext();
-          // Force reload so a newly replaced cover file is used
-          buffersRef.current = { page: null, cover: null };
-          loadPromiseRef.current = null;
-          ensureLoaded();
-        } catch {
-          /* ignore */
-        }
-      }
+      if (!next) unlockFlipbookAudio();
       return next;
     });
-  }, [getAudioContext, ensureLoaded]);
+  }, []);
 
   useEffect(() => {
     return () => {
-      if (audioCtxRef.current) {
-        audioCtxRef.current.close();
-      }
+      if (coverTimerRef.current) clearTimeout(coverTimerRef.current);
     };
   }, []);
 
-  return { isMuted, toggleMute, playPageTurn, playCoverTurn };
+  return { isMuted, toggleMute, playPageTurn, playCoverTurn, unlockAudio };
 }
