@@ -1,0 +1,9 @@
+# Sound credits
+
+page-turn.mp3
+  Source: BigSoundBank — "Pages that Turn #9" (Joseph SARDIN)
+  https://bigsoundbank.com/pages-that-turn-9-s2216.html
+  License: CC0
+
+cover-turn.mp3
+  Project cover open/close sample (user-provided)

@@ -25,7 +25,7 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
 
   const { pdfDocument, numPages, loading, progress, error, aspectRatio } = usePdfDocument(pdfSrc);
   const { evictCache, clearCache } = usePageRenderer();
-  const { isMuted, toggleMute, playPageTurn } = useSound();
+  const { isMuted, toggleMute, playPageTurn, playCoverTurn } = useSound();
 
   const [currentPage, setCurrentPage] = useState(0);
   const [isCoverView, setIsCoverView] = useState(true);
@@ -242,11 +242,38 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
     mainRef.current?.classList.toggle('is-turning', e.data !== 'read');
     bookStageRef.current?.classList.toggle('is-flipping', flipping);
 
-    // Cover swings start one page before the cover itself (closing the back
-    // cover begins on the last interior page; opening the front begins on 1).
+    // Cover swings:
+    //  - on a cover page (open away from front/back)
+    //  - from page 1 going back (close front)
+    //  - from last interior going forward (close back)
+    // Landscape+showCover leaves the back cover alone, so the last interior
+    // spread starts at lastIndex-2 (e.g. pages 63–64 → close onto 65). A plain
+    // `currentPage >= numPages-2` misses that and plays a page-turn rustle.
+    const lastIndex = Math.max(numPages - 1, 0);
+    const flipApi = bookRef.current?.pageFlip?.();
+    const dir = flipApi?.getRender?.()?.getDirection?.();
+    const goingBack = dir === 1 || dir === 'BACK' || dir === 'back';
+    const closingFront = goingBack && currentPage === 1;
+    // Close back cover: next from second-to-last (portrait) or last interior
+    // spread start lastIndex-2 (landscape). If direction isn't set yet (mobile
+    // cover door), still treat these pages as cover — but never when going back.
+    const closingBack =
+      !goingBack &&
+      numPages > 2 &&
+      (currentPage === lastIndex - 1 || currentPage === lastIndex - 2);
     const atCover =
-      currentPage <= 1 || (numPages > 0 && currentPage >= numPages - 2);
+      isCoverView ||
+      isBackCoverView ||
+      currentPage === 0 ||
+      currentPage === lastIndex ||
+      closingFront ||
+      closingBack;
+
     mainRef.current?.classList.toggle('is-cover-turning', flipping && atCover);
+    mainRef.current?.classList.toggle(
+      'is-cover-turning--back',
+      flipping && atCover && (isBackCoverView || closingBack || currentPage === lastIndex)
+    );
 
     setIsFlipping(flipping);
 
@@ -261,7 +288,12 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
     }
 
     if (e.data === 'flipping') {
-      playPageTurn();
+      // Sound length tracks the live flip so it ends with the page
+      if (atCover) {
+        playCoverTurn(isMobile ? 2600 : COVER_FLIP_MS);
+      } else {
+        playPageTurn(PAGE_FLIP_MS);
+      }
       // Expand to spread as soon as a cover starts opening
       if (!isMobile) {
         if (currentPage === 0) setIsCoverView(false);
@@ -273,7 +305,7 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
       stopCanvasSyncRef.current?.();
       stopCanvasSyncRef.current = null;
       syncFlipCanvases(bookStageRef.current || document);
-      mainRef.current?.classList.remove('is-cover-turning');
+      mainRef.current?.classList.remove('is-cover-turning', 'is-cover-turning--back');
       // Crossing the cover/interior boundary makes page-flip force both pages
       // to draw hard, and it never puts them back. Restore created density so
       // the next soft turn curls like paper instead of a rigid board — but
@@ -294,7 +326,7 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
         }
       }
     }
-  }, [currentPage, isMobile, playPageTurn, numPages]);
+  }, [currentPage, isMobile, playPageTurn, playCoverTurn, numPages, PAGE_FLIP_MS, COVER_FLIP_MS, isCoverView, isBackCoverView]);
 
   // react-pageflip constructs PageFlip once and never forwards later prop
   // changes — write page-dependent guards onto the live settings object.
@@ -305,7 +337,10 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
     // animation + asDeliberateFlip handle arrows / keyboard instead.
     const nearCover =
       currentPage === 0 ||
-      (numPages > 0 && (currentPage === numPages - 1 || currentPage === numPages - 2));
+      (numPages > 0 &&
+        (currentPage === numPages - 1 ||
+          currentPage === numPages - 2 ||
+          currentPage === numPages - 3));
     settings.disableFlipByClick = isMobile && nearCover;
   }, [isMobile, currentPage, loading, numPages, dimensions.width, dimensions.height, zoomLevel]);
 
@@ -313,8 +348,13 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
   useEffect(() => {
     const flip = bookRef.current?.pageFlip?.();
     if (!flip || prefersReducedMotion) return;
+    const lastIndex = Math.max(numPages - 1, 0);
     const atCover =
-      currentPage <= 1 || (numPages > 0 && currentPage >= numPages - 2);
+      currentPage === 0 ||
+      currentPage === 1 ||
+      currentPage === lastIndex ||
+      currentPage === lastIndex - 1 ||
+      currentPage === lastIndex - 2;
     applyFlipDuration(flip, atCover ? COVER_FLIP_MS : PAGE_FLIP_MS);
   }, [currentPage, prefersReducedMotion, loading, numPages, isMobile, COVER_FLIP_MS, PAGE_FLIP_MS]);
 
@@ -641,7 +681,7 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
                     setIsCoverView(idx === 0);
                     setIsBackCoverView(count > 0 && idx === count - 1);
                     setIsFlipping(false);
-                    mainRef.current?.classList.remove('is-turning', 'is-cover-turning');
+                    mainRef.current?.classList.remove('is-turning', 'is-cover-turning', 'is-cover-turning--back');
                     bookStageRef.current?.classList.remove('is-flipping');
                   }}
                   usePortrait={isMobile}

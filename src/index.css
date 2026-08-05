@@ -319,6 +319,19 @@ body {
   visibility: visible;
 }
 
+/* Cover open/close: the stage is 2 leaves wide but one leaf is empty, and a
+   full-stage box-shadow shows through it as a ghost "skeleton" rectangle.
+   Hug the shadow to the occupied half (front cover: right; back cover: left). */
+@media (min-width: 768px) {
+  .flipbook-main.is-cover-turning .flipbook-stage::before {
+    inset: 0 0 0 50%;
+  }
+
+  .flipbook-main.is-cover-turning--back .flipbook-stage::before {
+    inset: 0 50% 0 0;
+  }
+}
+
 .flipbook-stage--cover {
   overflow: hidden;
   background: transparent;
