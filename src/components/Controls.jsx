@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { trackEvent, EVENTS } from '../utils/analytics';
-import { flipBook } from '../utils/flipBook';
+import { flipBook, isFlipBookBusy } from '../utils/flipBook';
+import { enterFullscreen, exitFullscreen, isFullscreenActive } from '../utils/fullscreen';
 
 const ARROW_IDLE_MS = 5000;
 
@@ -23,13 +24,14 @@ export default function Controls({
   isMobile = false,
   isShortLandscape = false,
   bookAreaRef,
+  isFlipping = false,
 }) {
   const resolveFlip = () => getPageFlip?.() || pageFlip;
   // Bottom dock only on portrait phones — short landscape uses side arrows
   const useDockedArrows = isMobile && !isShortLandscape;
   const [barVisible, setBarVisible] = useState(true);
   const [arrowsVisible, setArrowsVisible] = useState(true);
-  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(() => isFullscreenActive());
   const [pageInput, setPageInput] = useState('');
   const barHideTimerRef = useRef(null);
   const arrowIdleTimerRef = useRef(null);
@@ -119,21 +121,31 @@ export default function Controls({
   }, [currentPage]);
 
   const toggleFullscreen = () => {
-    if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen().catch(() => {});
-      setIsFullscreen(true);
-      trackEvent(EVENTS.FULLSCREEN_TOGGLE, { state: 'enter' });
+    if (!isFullscreenActive()) {
+      enterFullscreen().then((ok) => {
+        if (ok) {
+          setIsFullscreen(true);
+          trackEvent(EVENTS.FULLSCREEN_TOGGLE, { state: 'enter' });
+        }
+      });
     } else {
-      document.exitFullscreen().catch(() => {});
-      setIsFullscreen(false);
-      trackEvent(EVENTS.FULLSCREEN_TOGGLE, { state: 'exit' });
+      exitFullscreen().then((ok) => {
+        if (ok) {
+          setIsFullscreen(false);
+          trackEvent(EVENTS.FULLSCREEN_TOGGLE, { state: 'exit' });
+        }
+      });
     }
   };
 
   useEffect(() => {
-    const handleFullscreenChange = () => setIsFullscreen(!!document.fullscreenElement);
+    const handleFullscreenChange = () => setIsFullscreen(isFullscreenActive());
     document.addEventListener('fullscreenchange', handleFullscreenChange);
-    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
+    };
   }, []);
 
   const handlePageJump = (e) => {
@@ -158,6 +170,19 @@ export default function Controls({
 
   const isFirstPage = currentPage === 0;
   const isLastPage = currentPage >= numPages - 1;
+  const navLocked = isFlipping;
+
+  const goPrev = () => {
+    const flip = resolveFlip();
+    if (!flip || isFlipBookBusy(flip)) return;
+    flipBook(flip, 'prev');
+  };
+
+  const goNext = () => {
+    const flip = resolveFlip();
+    if (!flip || isFlipBookBusy(flip)) return;
+    flipBook(flip, 'next');
+  };
 
   const onArrowEnter = () => {
     overArrowRef.current = true;
@@ -185,8 +210,8 @@ export default function Controls({
             >
               <NavArrow
                 direction="prev"
-                onClick={() => flipBook(resolveFlip(), 'prev')}
-                disabled={isFirstPage}
+                onClick={goPrev}
+                disabled={isFirstPage || navLocked}
                 isMobile
                 docked
                 onMouseEnter={onArrowEnter}
@@ -194,8 +219,8 @@ export default function Controls({
               />
               <NavArrow
                 direction="next"
-                onClick={() => flipBook(resolveFlip(), 'next')}
-                disabled={isLastPage}
+                onClick={goNext}
+                disabled={isLastPage || navLocked}
                 isMobile
                 docked
                 onMouseEnter={onArrowEnter}
@@ -206,8 +231,8 @@ export default function Controls({
             <>
               <NavArrow
                 direction="prev"
-                onClick={() => flipBook(resolveFlip(), 'prev')}
-                disabled={isFirstPage}
+                onClick={goPrev}
+                disabled={isFirstPage || navLocked}
                 bookCenterY={bookCenterY}
                 isMobile={isMobile}
                 onMouseEnter={onArrowEnter}
@@ -215,8 +240,8 @@ export default function Controls({
               />
               <NavArrow
                 direction="next"
-                onClick={() => flipBook(resolveFlip(), 'next')}
-                disabled={isLastPage}
+                onClick={goNext}
+                disabled={isLastPage || navLocked}
                 bookCenterY={bookCenterY}
                 isMobile={isMobile}
                 onMouseEnter={onArrowEnter}

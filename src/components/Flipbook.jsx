@@ -8,7 +8,8 @@ import { usePageRenderer } from '../hooks/usePageRenderer';
 import { useSound } from '../hooks/useSound';
 import { trackEvent, EVENTS } from '../utils/analytics';
 import { syncFlipCanvases, startFlipCanvasSync } from '../utils/syncFlipCanvases';
-import { flipBook, applyFlipDuration } from '../utils/flipBook';
+import { flipBook, applyFlipDuration, isFlipBookBusy } from '../utils/flipBook';
+import { enterFullscreen, isFullscreenActive, isPhoneViewport } from '../utils/fullscreen';
 
 import PageCanvas from './PageCanvas';
 import LoadingSkeleton from './LoadingSkeleton';
@@ -195,6 +196,31 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
     return () => clearTimeout(t);
   }, [loading, isMobile, dimensions.width, dimensions.height]);
 
+  // Mobile: enter fullscreen so Chrome's toolbar doesn't eat the book.
+  // Prefer the landing-page tap (already fullscreen); otherwise use the first
+  // touch on the viewer. Browsers require a user gesture for this API.
+  useEffect(() => {
+    if (!isMobile && !isPhoneViewport()) return;
+    if (isFullscreenActive()) return;
+
+    let armed = true;
+    const tryEnter = () => {
+      if (!armed || isFullscreenActive()) return;
+      armed = false;
+      enterFullscreen();
+      window.removeEventListener('pointerdown', tryEnter);
+      window.removeEventListener('touchstart', tryEnter);
+    };
+
+    window.addEventListener('pointerdown', tryEnter, { passive: true });
+    window.addEventListener('touchstart', tryEnter, { passive: true });
+    return () => {
+      armed = false;
+      window.removeEventListener('pointerdown', tryEnter);
+      window.removeEventListener('touchstart', tryEnter);
+    };
+  }, [isMobile]);
+
   useEffect(() => {
     if (!bookRef.current || !bookRef.current.pageFlip) return;
 
@@ -367,10 +393,10 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
 
       switch(e.key) {
         case 'ArrowRight':
-          flipBook(flip, 'next');
+          if (!isFlipBookBusy(flip)) flipBook(flip, 'next');
           break;
         case 'ArrowLeft':
-          flipBook(flip, 'prev');
+          if (!isFlipBookBusy(flip)) flipBook(flip, 'prev');
           break;
         case '=':
         case '+':
@@ -754,6 +780,7 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
             isMobile={isMobile}
             isShortLandscape={isShortLandscape}
             bookAreaRef={mainRef}
+            isFlipping={isFlipping}
           />
         )}
       </footer>

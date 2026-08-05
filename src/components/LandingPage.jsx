@@ -1,11 +1,21 @@
 import { useNavigate } from 'react-router';
 import { motion } from 'motion/react';
 import { warmPdf } from '../utils/warmPdf';
+import { enterFullscreen, isPhoneViewport } from '../utils/fullscreen';
 
 const COVER_RATIO = 842 / 595;
 
 export default function LandingPage() {
   const navigate = useNavigate();
+
+  const openProspectus = (path) => {
+    // Enter fullscreen in the same tap that opens the book — browsers only
+    // allow this inside a user gesture, and it hides the mobile Chrome bar.
+    if (isPhoneViewport()) {
+      enterFullscreen();
+    }
+    navigate(path);
+  };
 
   return (
     <div className="landing-page min-h-dvh w-full flex flex-col items-center relative overflow-x-hidden overflow-y-auto px-3 sm:px-4 pb-8 sm:pb-8">
@@ -103,7 +113,7 @@ export default function LandingPage() {
             pdfSrc="/pdfs/UG26.v2.pdf"
             coverSrc="/covers/ug-cover.jpg"
             delay={0.4}
-            onClick={() => navigate('/ug')}
+            onClick={() => openProspectus('/ug')}
           />
 
           <ProspectusCard
@@ -112,7 +122,7 @@ export default function LandingPage() {
             pdfSrc="/pdfs/PG26.v2.pdf"
             coverSrc="/covers/pg-cover.jpg"
             delay={0.5}
-            onClick={() => navigate('/pg')}
+            onClick={() => openProspectus('/pg')}
           />
         </div>
       </div>

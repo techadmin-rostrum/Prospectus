@@ -16,6 +16,13 @@ let coverAnimLockUntil = 0;
 let stopSoftSync = null;
 const COVER_DOOR_MS = 2600;
 
+/** True while a cover door or soft page-turn is still running. */
+export function isFlipBookBusy(pageFlip) {
+  if (coverAnimLock && Date.now() < coverAnimLockUntil) return true;
+  const state = pageFlip?.getState?.();
+  return state === 'flipping' || state === 'user_fold';
+}
+
 /**
  * page-flip sets duration = (pathLen / 1000) * flippingTime when pathLen < 1000.
  * Boost flippingTime so wall-clock ≈ targetMs on narrow pages.
@@ -283,6 +290,12 @@ function coverDoorFor(idx, lastIndex, direction) {
 export function flipBook(pageFlip, direction = 'next') {
   if (!pageFlip) return;
 
+  // Rapid next/prev taps: page-flip calls finishAnimation() and starts another
+  // soft flip mid-turn. On mobile that soft-curls the back cover onto screen,
+  // then a later cover-door close shows the same end page twice. Swallow taps
+  // until the current turn (or cover door) has fully settled.
+  if (isFlipBookBusy(pageFlip)) return;
+
   syncFlipCanvases();
 
   const render = pageFlip.getRender?.();
@@ -301,6 +314,23 @@ export function flipBook(pageFlip, direction = 'next') {
       if (result === 'ok' || result === 'busy') return;
       try {
         pageFlip.turnToPage?.(door.targetIndex);
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
+
+    // Safety net: never soft-flip onto/off the back cover if coverDoorFor missed
+    if (direction === 'next' && idx === lastIndex - 1) {
+      const result = animateCoverDoor(pageFlip, {
+        coverIndex: lastIndex,
+        targetIndex: lastIndex,
+        opening: false,
+        hinge: 'right',
+      });
+      if (result === 'ok' || result === 'busy') return;
+      try {
+        pageFlip.turnToPage?.(lastIndex);
       } catch {
         /* ignore */
       }
