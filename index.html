@@ -8,6 +8,219 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="description" content="Explore our Undergraduate and Postgraduate Prospectus — interactive flipbook experience by Rostrum Education." />
+
+    <!--
+      Loaded before the app bundle and written in ES5 on purpose: it has to keep
+      working when the thing that failed is the bundle itself (parse error,
+      unsupported syntax, a chunk that never arrives). Without this a single
+      throw anywhere leaves a blank white page and no way to tell what happened
+      on a device we can't reach.
+    -->
+    <script>
+      (function () {
+        var reports = [];
+        var box = null;
+        var mounted = false;
+
+        function esc(s) {
+          return String(s == null ? '' : s).replace(/[&<>]/g, function (c) {
+            return c === '&' ? '&amp;' : c === '<' ? '&lt;' : '&gt;';
+          });
+        }
+
+        function diagnostics() {
+          var out = [];
+          function add(k, v) { out.push(k + ': ' + v); }
+          function tryAdd(k, fn) {
+            try { add(k, fn()); } catch (e) { add(k, 'unavailable'); }
+          }
+          tryAdd('url', function () { return location.href; });
+          tryAdd('userAgent', function () { return navigator.userAgent; });
+          tryAdd('screen', function () {
+            return screen.width + 'x' + screen.height + ' @' + (window.devicePixelRatio || 1) + 'x';
+          });
+          tryAdd('viewport', function () { return window.innerWidth + 'x' + window.innerHeight; });
+          tryAdd('online', function () { return navigator.onLine ? 'yes' : 'NO'; });
+          tryAdd('network', function () {
+            var c = navigator.connection || {};
+            return (c.effectiveType || 'unknown') + (c.saveData ? ' (data saver on)' : '');
+          });
+          tryAdd('deviceMemory', function () { return navigator.deviceMemory || 'unknown'; });
+          // Lockdown Mode and some content blockers disable WebAssembly, which
+          // pdf.js v6 needs for several image codecs.
+          tryAdd('webAssembly', function () {
+            return typeof WebAssembly === 'object' ? 'available' : 'BLOCKED';
+          });
+          // Safari's "Block All Cookies" makes even reading localStorage throw.
+          add('localStorage', (function () {
+            try {
+              localStorage.setItem('__probe', '1');
+              localStorage.removeItem('__probe');
+              return 'available';
+            } catch (e) {
+              return 'BLOCKED (' + (e && e.name) + ')';
+            }
+          })());
+          tryAdd('timezone', function () {
+            return Intl.DateTimeFormat().resolvedOptions().timeZone;
+          });
+          tryAdd('time', function () { return new Date().toString(); });
+          return out.join('\n');
+        }
+
+        function asText() {
+          var parts = [];
+          for (var i = 0; i < reports.length; i++) {
+            var r = reports[i];
+            parts.push('--- ' + r.title + ' ---\n' + r.message + (r.stack ? '\n\n' + r.stack : ''));
+          }
+          return parts.join('\n\n') + '\n\n--- device ---\n' + diagnostics();
+        }
+
+        function mount() {
+          var host = document.body || document.documentElement;
+          if (!box) {
+            box = document.createElement('div');
+            box.id = 'flipbook-fatal';
+            box.setAttribute(
+              'style',
+              'position:fixed;inset:0;z-index:2147483647;overflow:auto;' +
+                '-webkit-overflow-scrolling:touch;background:#1b1114;color:#f6efe9;' +
+                'font:13px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;' +
+                'padding:20px;text-align:left;-webkit-user-select:text;user-select:text'
+            );
+          }
+          if (box.parentNode !== host) host.appendChild(box);
+        }
+
+        function render() {
+          mount();
+          var html =
+            '<div style="max-width:760px;margin:0 auto">' +
+            '<h1 style="font:600 17px/1.4 system-ui,sans-serif;margin:0 0 4px">' +
+            'The prospectus could not load</h1>' +
+            '<p style="font:13px/1.5 system-ui,sans-serif;color:#c9b8ad;margin:0 0 16px">' +
+            'Please send this screen to us so we can fix it.</p>';
+
+          for (var i = 0; i < reports.length; i++) {
+            var r = reports[i];
+            html +=
+              '<div style="background:#2a1a1f;border:1px solid #4a2c34;border-radius:8px;' +
+              'padding:12px;margin:0 0 12px">' +
+              '<div style="color:#ff9d9d;font-weight:600;margin-bottom:6px">' + esc(r.title) + '</div>' +
+              '<div style="white-space:pre-wrap;word-break:break-word">' + esc(r.message) + '</div>' +
+              (r.stack
+                ? '<pre style="white-space:pre-wrap;word-break:break-word;color:#b9a79c;' +
+                  'margin:8px 0 0;font-size:11px">' + esc(r.stack) + '</pre>'
+                : '') +
+              '</div>';
+          }
+
+          html +=
+            '<div style="background:#2a1a1f;border:1px solid #4a2c34;border-radius:8px;padding:12px">' +
+            '<div style="color:#ffc9a0;font-weight:600;margin-bottom:6px">Device</div>' +
+            '<pre style="white-space:pre-wrap;word-break:break-word;margin:0;font-size:11px">' +
+            esc(diagnostics()) + '</pre></div>' +
+            '<div style="margin-top:16px">' +
+            '<button id="flipbook-fatal-copy" style="font:600 13px system-ui,sans-serif;' +
+            'background:#e2445c;color:#fff;border:0;border-radius:8px;padding:10px 16px;' +
+            'margin-right:8px">Copy details</button>' +
+            '<button id="flipbook-fatal-reload" style="font:600 13px system-ui,sans-serif;' +
+            'background:transparent;color:#f6efe9;border:1px solid #6b4a52;border-radius:8px;' +
+            'padding:10px 16px">Reload</button>' +
+            '</div></div>';
+
+          box.innerHTML = html;
+
+          var copy = document.getElementById('flipbook-fatal-copy');
+          if (copy) {
+            copy.onclick = function () {
+              var text = asText();
+              function done() { copy.textContent = 'Copied'; }
+              try {
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                  navigator.clipboard.writeText(text).then(done, fallback);
+                } else {
+                  fallback();
+                }
+              } catch (e) { fallback(); }
+              function fallback() {
+                // iOS needs a real, visible field to select from.
+                var ta = document.createElement('textarea');
+                ta.value = text;
+                ta.setAttribute('style', 'position:fixed;top:0;left:0;width:100%;height:40vh;z-index:2147483647');
+                box.appendChild(ta);
+                ta.focus();
+                ta.setSelectionRange(0, text.length);
+                try { document.execCommand('copy'); done(); } catch (e2) {
+                  copy.textContent = 'Select the text above and copy';
+                }
+              }
+            };
+          }
+          var reload = document.getElementById('flipbook-fatal-reload');
+          if (reload) {
+            reload.onclick = function () { location.reload(); };
+          }
+        }
+
+        function report(title, message, stack) {
+          // Don't let a broken overlay hide the original failure.
+          try {
+            for (var i = 0; i < reports.length; i++) {
+              if (reports[i].title === title && reports[i].message === message) return;
+            }
+            reports.push({ title: title, message: String(message), stack: stack ? String(stack) : '' });
+            if (document.body) render();
+            else document.addEventListener('DOMContentLoaded', render);
+          } catch (e) { /* nothing left to do */ }
+        }
+
+        window.__flipbookReportFatal = report;
+        window.__flipbookAppMounted = function () { mounted = true; };
+
+        window.addEventListener(
+          'error',
+          function (e) {
+            // Capture phase also catches failed <script>/<link>/<img> loads,
+            // which surface as an error event on the element with no e.error.
+            var t = e.target;
+            if (t && t !== window && (t.src || t.href)) {
+              report(
+                'A required file failed to load',
+                (t.tagName || 'resource') + ': ' + (t.src || t.href) +
+                  '\nUsually a network block, a proxy, or a bad MIME type.'
+              );
+              return;
+            }
+            report('Script error', e.message || 'Unknown error', e.error && e.error.stack);
+          },
+          true
+        );
+
+        window.addEventListener('unhandledrejection', function (e) {
+          var r = e.reason;
+          report(
+            'Unhandled promise rejection',
+            (r && (r.message || r.toString())) || 'Unknown reason',
+            r && r.stack
+          );
+        });
+
+        // A white screen with no thrown error looks identical to a crash, so
+        // fail loudly if nothing ever rendered.
+        setTimeout(function () {
+          if (mounted) return;
+          var root = document.getElementById('root');
+          if (root && root.childElementCount > 0) return;
+          report(
+            'The app never started',
+            'Nothing rendered after 15 seconds and no error was thrown. The app ' +
+              'bundle probably never downloaded or never ran.'
+          );
+        }, 15000);
+      })();
+    </script>
     
     <!-- Preconnect for Google Fonts performance -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
