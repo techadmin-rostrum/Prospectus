@@ -429,6 +429,31 @@ body.flipbook-soft-curling {
   contain: none;
 }
 
+/* page-flip gives each page perspective + preserve-3d, so the two halves are
+   separate composited layers. At fractional device pixel ratios (Windows at
+   125%/150%) their shared edge lands mid-pixel and the compositor blends both
+   edges against the transparent backdrop, leaving a dark hairline down the
+   gutter. Backing the seam with opaque white makes that blend land on page
+   instead. Keep it to a narrow strip: --spread is already set while a cover is
+   still swinging, and a full-stage fill would show through the empty leaf. */
+.flipbook-stage--spread::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 24px;
+  transform: translateX(-50%);
+  z-index: 0;
+  background: #fff;
+  pointer-events: none;
+}
+
+.flipbook-main.is-cover-turning .flipbook-stage--spread::after,
+.flipbook-main.is-cover-turning--back .flipbook-stage--spread::after {
+  display: none;
+}
+
 /* ---------------------------------------------------------------
    Closed book (front / back cover)
    A single flat leaf reads as a poster, so add the book block:
@@ -600,25 +625,38 @@ body.flipbook-turning {
   );
 }
 
+/* A 2px bar with a 1px white edge reads as a seam between two sheets, not as
+   a fold. Widen it into a soft valley and let the mask fade it out top and
+   bottom, so the pages meet without a hard line. */
 .book-depth__spine {
   position: absolute;
   top: 0;
   bottom: 0;
   left: 50%;
-  width: 2px;
+  width: 16px;
   transform: translateX(-50%);
-  border-radius: 1px;
   background: linear-gradient(
-    180deg,
-    rgba(55, 45, 38, 0.04) 0%,
-    rgba(55, 45, 38, 0.16) 12%,
-    rgba(55, 45, 38, 0.2) 50%,
-    rgba(55, 45, 38, 0.16) 88%,
-    rgba(55, 45, 38, 0.04) 100%
+    90deg,
+    rgba(55, 45, 38, 0) 0%,
+    rgba(55, 45, 38, 0.06) 42%,
+    rgba(55, 45, 38, 0.09) 50%,
+    rgba(55, 45, 38, 0.06) 58%,
+    rgba(55, 45, 38, 0) 100%
   );
-  box-shadow:
-    1px 0 0 rgba(255, 255, 255, 0.4),
-    -1px 0 0 rgba(55, 45, 38, 0.08);
+  -webkit-mask-image: linear-gradient(
+    180deg,
+    transparent 0%,
+    #000 8%,
+    #000 92%,
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    180deg,
+    transparent 0%,
+    #000 8%,
+    #000 92%,
+    transparent 100%
+  );
 }
 
 /* Soft valley across the gutter for open-book depth */

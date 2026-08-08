@@ -8,6 +8,7 @@ import { clipPathFromPoints } from './curl-geometry.js';
 export { clipPathFromPoints };
 export {
   computeForwardBottomCurl,
+  computeFlatRemainder,
   sampleFlipPath,
 } from './curl-geometry.js';
 

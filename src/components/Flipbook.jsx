@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useNavigate, useLocation } from 'react-router';
 import HTMLFlipBook from 'react-pageflip';
 import { motion } from 'motion/react';
@@ -16,7 +16,10 @@ import {
   syncAppHeight,
 } from '../utils/fullscreen';
 
+import { instrumentPageFlip, flipLog } from '../utils/flipDebug';
+
 import PageCanvas from './PageCanvas';
+import { PageWindowContext } from './PageWindowContext';
 import LoadingSkeleton from './LoadingSkeleton';
 import Controls from './Controls';
 import ThumbnailStrip from './ThumbnailStrip';
@@ -34,7 +37,13 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
   const { evictCache, clearCache } = usePageRenderer();
   const { isMuted, toggleMute, playPageTurn, playCoverTurn, unlockAudio } = useSound();
 
-  const [currentPage, setCurrentPage] = useState(0);
+  // Seeded from the URL so a deep link is satisfied by onInit's restore. The
+  // book's own index stays the single source of truth from then on.
+  const [currentPage, setCurrentPage] = useState(() => {
+    if (typeof window === 'undefined') return 0;
+    const p = parseInt(new URLSearchParams(window.location.search).get('page'), 10);
+    return Number.isFinite(p) && p > 0 ? p - 1 : 0;
+  });
   const [isCoverView, setIsCoverView] = useState(true);
   const [isBackCoverView, setIsBackCoverView] = useState(false);
   const [isFlipping, setIsFlipping] = useState(false);
@@ -241,20 +250,23 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
     };
   }, [isMobile, unlockAudio]);
 
+  // Only external navigation (back/forward, pasted link) may move the book.
+  // Echoing our own ?page= write back into turnToPage would fire a second
+  // navigation on top of the running turn.
+  const urlPageWriteRef = useRef(null);
+
   useEffect(() => {
-    if (!bookRef.current || !bookRef.current.pageFlip) return;
+    const flip = bookRef.current?.pageFlip?.();
+    if (!flip || !numPages) return;
 
-    const params = new URLSearchParams(location.search);
-    const pageParam = params.get('page');
+    const pageParam = new URLSearchParams(location.search).get('page');
+    if (!pageParam || pageParam === String(urlPageWriteRef.current)) return;
 
-    if (pageParam) {
-      const targetPage = parseInt(pageParam, 10) - 1;
-      if (!isNaN(targetPage) && targetPage >= 0 && targetPage < numPages && targetPage !== currentPage) {
-        setTimeout(() => {
-          bookRef.current.pageFlip().turnToPage(targetPage);
-        }, 100);
-      }
-    }
+    const targetPage = parseInt(pageParam, 10) - 1;
+    if (isNaN(targetPage) || targetPage < 0 || targetPage >= numPages) return;
+    if (targetPage === flip.getCurrentPageIndex?.()) return;
+
+    flip.turnToPage(targetPage);
   }, [location.search, numPages]);
 
   const updateUrlForPage = useCallback((newPageIndex) => {
@@ -264,12 +276,14 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
 
     const params = new URLSearchParams(location.search);
     if (params.get('page') !== String(displayPage)) {
+      urlPageWriteRef.current = displayPage;
       params.set('page', displayPage);
       navigate({ search: params.toString() }, { replace: true });
     }
   }, [navigate, location.search, evictCache]);
 
-  const onFlip = useCallback((e) => {
+  const handleFlip = useCallback((e) => {
+    flipLog('react:onFlip', bookRef.current?.pageFlip?.(), { page: e.data });
     updateUrlForPage(e.data);
     trackEvent(EVENTS.PAGE_TURN, { page: e.data + 1 });
     // Front cover (right leaf) / back cover (left leaf): center after the turn settles
@@ -278,7 +292,8 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
   }, [updateUrlForPage, numPages]);
 
   // Sync flip timing + stage reveal with the live flip state.
-  const onChangeState = useCallback((e) => {
+  const handleChangeState = useCallback((e) => {
+    flipLog('react:onChangeState', bookRef.current?.pageFlip?.(), { state: e.data });
     const turning =
       e.data === 'flipping' || e.data === 'user_fold' || e.data === 'fold_corner';
     const flipping = e.data === 'flipping' || e.data === 'user_fold';
@@ -378,6 +393,16 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
       }
     }
   }, [currentPage, isMobile, playPageTurn, playCoverTurn, numPages, PAGE_FLIP_MS, COVER_FLIP_MS, isCoverView, isBackCoverView]);
+
+  // react-pageflip binds these once, when the children array last changed
+  // identity. Now that the children are stable that is a single bind for the
+  // life of the book, so the bound function has to forward to the live one.
+  const handlersRef = useRef({});
+  handlersRef.current.flip = handleFlip;
+  handlersRef.current.changeState = handleChangeState;
+
+  const onFlip = useCallback((e) => handlersRef.current.flip(e), []);
+  const onChangeState = useCallback((e) => handlersRef.current.changeState(e), []);
 
   // react-pageflip constructs PageFlip once and never forwards later prop
   // changes — write page-dependent guards onto the live settings object.
@@ -501,6 +526,27 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
     setPanState(prev => ({ ...prev, isDragging: false }));
   };
 
+  const pageW = dimensions.width * zoomLevel;
+  const pageH = dimensions.height * zoomLevel;
+
+  // Identity must survive a page turn. StPageFlip's React wrapper reacts to
+  // `props.children` changing by calling updateFromHtml(), which destroys and
+  // rebuilds every Page object — mid-animation that reads as the page jumping.
+  const pageElements = useMemo(
+    () => Array.from({ length: numPages }, (_, i) => (
+      <PageCanvas
+        key={i}
+        pageNum={i + 1}
+        numPages={numPages}
+        pdfDocument={pdfDocument}
+        width={pageW}
+        height={pageH}
+        extraScale={1}
+      />
+    )),
+    [numPages, pdfDocument, pageW, pageH]
+  );
+
   if (error) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-white text-slate-900 p-6">
@@ -521,8 +567,6 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
     );
   }
 
-  const pageW = dimensions.width * zoomLevel;
-  const pageH = dimensions.height * zoomLevel;
   // Front cover = right leaf; back cover = left leaf. Crop to one page and center it.
   const singleCentered = !isMobile && (isCoverView || isBackCoverView);
   const singlePageOffsetX = !isMobile && isCoverView ? -pageW : 0;
@@ -688,6 +732,7 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
                     position: 'relative',
                   }}
                 >
+                <PageWindowContext.Provider value={currentPage}>
                 <HTMLFlipBook
                   key={`book-${isMobile ? 'm' : 'd'}-${Math.round(dimensions.width / 64) * 64}x${Math.round(dimensions.height / 64) * 64}`}
                   width={pageW}
@@ -716,6 +761,7 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
                     // Hard covers (door-open) + soft interior pages (paper curl)
                     const flip = bookRef.current?.pageFlip?.();
                     if (!flip) return;
+                    instrumentPageFlip(flip);
                     const count = flip.getPageCount();
                     for (let i = 0; i < count; i++) {
                       const page = flip.getPage(i);
@@ -743,28 +789,9 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
                   usePortrait={isMobile}
                   flippingTime={flipDurationMs}
                 >
-                  {Array.from({ length: numPages }, (_, i) => (
-                    <PageCanvas
-                      key={i}
-                      pageNum={i + 1}
-                      numPages={numPages}
-                      pdfDocument={pdfDocument}
-                      width={pageW}
-                      height={pageH}
-                      extraScale={1}
-                      priority={
-                        Math.abs(currentPage - i) <= 1 ||
-                        (currentPage === 0 && i <= 1) ||
-                        (numPages > 0 && currentPage >= numPages - 2 && i >= numPages - 2)
-                      }
-                      shouldRender={
-                        Math.abs(currentPage - i) <= 3 ||
-                        (currentPage === 0 && i <= 3) ||
-                        (numPages > 0 && currentPage >= numPages - 3 && i >= numPages - 3)
-                      }
-                    />
-                  ))}
+                  {pageElements}
                 </HTMLFlipBook>
+                </PageWindowContext.Provider>
 
                 {!singleCentered && !isMobile && (
                   <div className="book-depth" aria-hidden="true">

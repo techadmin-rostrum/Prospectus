@@ -11,8 +11,10 @@
  */
 
 import { syncFlipCanvases, startFlipCanvasSync } from './syncFlipCanvases';
+import { flipLog, nextAnimationId } from './flipDebug';
 import {
   computeForwardBottomCurl,
+  computeFlatRemainder,
   sampleFlipPath,
   clipPathFromPoints,
   curlFoldHighlightStyle,
@@ -74,6 +76,34 @@ export function isFlipBookBusy(pageFlip) {
 }
 
 /**
+ * Undo whatever the library left mid-turn.
+ *
+ * page-flip resets the flipping page and its shadows inside the flip-animation
+ * callback, and that callback starts with `if (!this.calc) return`. Interrupting
+ * a turn — a queued jump landing on top of one, or a new turn starting early —
+ * skips the whole block. The render loop then keeps re-drawing that page from
+ * its frozen mid-turn state every frame — a rotated sliver with a diagonal
+ * clip edge — and keeps painting its shadow down the gutter.
+ *
+ * Only safe once the book is idle; see scheduleShadowSweep.
+ */
+function settleFlipRender(pageFlip) {
+  try {
+    const render = pageFlip?.getRender?.();
+    if (!render) return;
+
+    // Order matters only in that all three must happen: drawFrame() re-draws
+    // flippingPage from its frozen state on every frame it is non-null, and
+    // draws the shadows for as long as both it and `shadow` are set.
+    render.setFlippingPage?.(null);
+    render.setBottomPage?.(null);
+    render.clearShadow?.();
+  } catch {
+    /* render not built yet */
+  }
+}
+
+/**
  * Switch the library's current page without allowing a second visible
  * native animation to compete with our custom overlay animation.
  */
@@ -83,6 +113,7 @@ function turnToPageInstant(pageFlip, targetIndex) {
   const settings = pageFlip.getSettings?.();
   if (!settings) {
     pageFlip.turnToPage(targetIndex);
+    settleFlipRender(pageFlip);
     return;
   }
 
@@ -96,6 +127,10 @@ function turnToPageInstant(pageFlip, targetIndex) {
   } finally {
     settings.flippingTime = previousFlippingTime;
   }
+
+  // An instant jump bypasses the animation callback entirely, so nothing
+  // would otherwise take down the shadow from the turn it interrupted.
+  settleFlipRender(pageFlip);
 }
 
 export function applyFlipDuration(pageFlip, targetMs) {
@@ -210,6 +245,10 @@ function animateCoverDoor(
   stage.querySelectorAll('.cover-door-clone').forEach((el) => el.remove());
 
   const doorMs = turnDuration(COVER_DOOR_MS);
+  const animationId = nextAnimationId('door');
+  flipLog('door:start', pageFlip, {
+    animationId, coverIndex, targetIndex, opening, hinge, doorMs,
+  });
 
   coverAnimLock = true;
   coverAnimLockUntil = Date.now() + doorMs + 500;
@@ -322,6 +361,7 @@ function animateCoverDoor(
 
     coverAnimLock = false;
     stopSoftSync = startFlipCanvasSync(document);
+    flipLog('door:finish', pageFlip, { animationId, targetIndex });
   };
 
   const onEnd = (event) => {
@@ -369,6 +409,11 @@ function animatePortraitSoftCurl(pageFlip, direction = 'next') {
   const box = currEl.getBoundingClientRect();
   if (!box.width || !box.height) return 'fail';
 
+  const animationId = nextAnimationId('curl');
+  flipLog('curl:start', pageFlip, {
+    animationId, direction, targetIndex, coverAnimLock,
+  });
+
   const stageBox = stage.getBoundingClientRect();
   const main = currEl.closest('.flipbook-main');
   const w = box.width;
@@ -388,21 +433,50 @@ function animatePortraitSoftCurl(pageFlip, direction = 'next') {
   stopSoftSync = null;
   syncFlipCanvases();
 
-  const pageClone = currEl.cloneNode(true);
-  pageClone.className = 'portrait-soft-page';
+  // Both directions run the same turn: the current page peels away and the
+  // target is revealed underneath. prev only differs by mirroring the host, so
+  // the peel runs from the opposite edge.
+  const sheetEl = currEl;
 
-  // Do not mirror this element. The host below is the only mirrored layer
-  // for previous-page turns. Mirroring both layers cancels itself out.
-  pageClone.style.cssText = [
+  // The host is mirrored for prev so the peel runs from the opposite edge;
+  // counter-mirror the artwork so the page itself still reads the right way.
+  const cloneCss = [
     'display:block',
     'width:100%',
     'height:100%',
-    'transform:none',
+    goingPrev ? 'transform:scaleX(-1)' : 'transform:none',
     'transform-origin:center',
     'background:#fff',
   ].join(';');
 
-  copyCanvasPixels(currEl, pageClone);
+  const pageClone = sheetEl.cloneNode(true);
+  pageClone.className = 'portrait-soft-page';
+  pageClone.style.cssText = cloneCss;
+  copyCanvasPixels(sheetEl, pageClone);
+
+  // Second copy of the same sheet, clipped to the part that has not lifted.
+  // Without it the book underneath is visible from frame one, which reads as
+  // the page changing instantly on click and then curling to reveal itself.
+  const flatClone = sheetEl.cloneNode(true);
+  flatClone.className = 'portrait-soft-page';
+  flatClone.style.cssText = cloneCss;
+  copyCanvasPixels(sheetEl, flatClone);
+
+  const flat = document.createElement('div');
+  flat.className = 'portrait-soft-flat';
+  flat.style.cssText = [
+    'position:absolute',
+    'left:0',
+    'top:0',
+    `width:${w}px`,
+    `height:${h}px`,
+    'margin:0',
+    'pointer-events:none',
+    'background:#fff',
+    'overflow:hidden',
+    'z-index:1',
+  ].join(';');
+  flat.append(flatClone);
 
   const shade = document.createElement('div');
   shade.className = 'portrait-soft-shade';
@@ -427,14 +501,14 @@ function animatePortraitSoftCurl(pageFlip, direction = 'next') {
     'pointer-events:none',
     'background:#fff',
     'overflow:visible',
-    'z-index:2',
+    'z-index:3',
   ].join(';');
   leaf.append(pageClone, shade, pageShade);
 
   const castShadow = document.createElement('div');
   castShadow.className = 'portrait-soft-cast';
   castShadow.style.cssText =
-    'position:absolute;left:0;top:0;pointer-events:none;opacity:0;z-index:1';
+    'position:absolute;left:0;top:0;pointer-events:none;opacity:0;z-index:2';
 
   const host = document.createElement('div');
   host.className = 'portrait-soft-mirror';
@@ -451,7 +525,7 @@ function animatePortraitSoftCurl(pageFlip, direction = 'next') {
     'transform-origin:center',
     'pointer-events:none',
   ].join(';');
-  host.append(castShadow, leaf);
+  host.append(flat, castShadow, leaf);
 
   main?.classList.add('is-turning', 'is-soft-curling');
   stage.classList.add('is-flipping', 'is-soft-curling');
@@ -466,8 +540,9 @@ function animatePortraitSoftCurl(pageFlip, direction = 'next') {
   html.style.overflow = 'hidden';
   body.style.overflow = 'hidden';
 
-  // Put the old-page clone above the book BEFORE changing the library index.
-  // Thus the instant underlying page switch cannot be seen as a jump.
+  // Cover the book with the sheet before touching the library index, so the
+  // instant switch underneath is never visible. The first paint() below runs
+  // in this same task, so the browser cannot render an unclipped frame.
   stage.append(host);
   void host.offsetWidth;
   pageFlip.updateState?.('flipping');
@@ -486,7 +561,7 @@ function animatePortraitSoftCurl(pageFlip, direction = 'next') {
     Object.assign(castShadow.style, styles);
   };
 
-  const paint = (tCurl) => {
+  const paint = (tCurl, fade = 1) => {
     const t = Math.max(T_START * 0.85, tCurl);
     const localPos = sampleFlipPath(w, h, t);
     const curl = computeForwardBottomCurl(
@@ -496,15 +571,28 @@ function animatePortraitSoftCurl(pageFlip, direction = 'next') {
       localPos.t ?? t
     );
 
-    if (!curl || curl.clipLocal.length < 3 || (localPos.t ?? t) > 0.97) {
+    if (!curl || curl.clipLocal.length < 3 || (localPos.t ?? t) > 0.999) {
+      // Sheet fully gone: uncover the book completely.
       leaf.style.opacity = '0';
+      flat.style.opacity = '0';
       shade.style.opacity = '0';
       pageShade.style.opacity = '0';
       castShadow.style.opacity = '0';
       return;
     }
 
-    leaf.style.opacity = '1';
+    leaf.style.opacity = String(fade);
+
+    // The still-flat half of the sheet keeps hiding the book underneath.
+    const remainder = computeFlatRemainder(w, h, curl);
+    if (remainder.length >= 3) {
+      const flatClip = clipPathFromPoints(remainder);
+      flat.style.clipPath = flatClip;
+      flat.style.webkitClipPath = flatClip;
+      flat.style.opacity = String(fade);
+    } else {
+      flat.style.opacity = '0';
+    }
 
     const clip = clipPathFromPoints(curl.clipLocal);
     leaf.style.clipPath = clip;
@@ -517,9 +605,17 @@ function animatePortraitSoftCurl(pageFlip, direction = 'next') {
     Object.assign(shade.style, curlFoldHighlightStyle(curl));
     Object.assign(pageShade.style, curlFoldShadeStyle(curl, { intensity: 0.4 }));
     applyShadowStyles(curlDropShadowStyle(curl, w, h));
+    castShadow.style.opacity = String((parseFloat(castShadow.style.opacity) || 0) * fade);
   };
 
-  paint(T_START);
+  // The peel path asymptotes: a sliver of the sheet is still on the page when
+  // time runs out. Dissolve it over the last stretch instead of cutting it,
+  // which is what made the next page appear with no transition.
+  const FADE_FROM = 0.88;
+  const fadeAt = (u) =>
+    (u <= FADE_FROM ? 1 : Math.max(0, 1 - (u - FADE_FROM) / (1 - FADE_FROM)));
+
+  paint(T_START, fadeAt(0));
 
   let finished = false;
   const finish = () => {
@@ -543,6 +639,7 @@ function animatePortraitSoftCurl(pageFlip, direction = 'next') {
 
     coverAnimLock = false;
     stopSoftSync = startFlipCanvasSync(document);
+    flipLog('curl:finish', pageFlip, { animationId, targetIndex });
   };
 
   const start = performance.now();
@@ -551,7 +648,7 @@ function animatePortraitSoftCurl(pageFlip, direction = 'next') {
     if (finished) return;
 
     const u = Math.min(1, (now - start) / curlMs);
-    paint(T_START + (T_END - T_START) * ease(u));
+    paint(T_START + (T_END - T_START) * ease(u), fadeAt(u));
 
     if (u < 1) requestAnimationFrame(tick);
     else finish();
@@ -596,7 +693,13 @@ function coverDoorFor(idx, lastIndex, direction) {
 
 export function flipBook(pageFlip, direction = 'next') {
   if (!pageFlip) return;
+  flipLog('flipBook:enter', pageFlip, { direction, coverAnimLock });
   if (isFlipBookBusy(pageFlip)) return;
+
+  // Start every turn from a clean slate — the previous one may have been cut
+  // short before the library got to tidy up — and sweep again once it settles.
+  settleFlipRender(pageFlip);
+  scheduleShadowSweep(pageFlip);
 
   const render = pageFlip.getRender?.();
   const controller = pageFlip.getFlipController?.();
@@ -714,9 +817,39 @@ let queueDeadline = 0;
 // drop the backlog rather than flipping long after the user stopped clicking.
 const QUEUE_MAX_WAIT_MS = 6000;
 
+let sweepRaf = 0;
+let sweepDeadline = 0;
+
+/**
+ * Once the book stops moving, take down any shadow that outlived its turn.
+ * Clicking again is not required — the band would otherwise sit there.
+ */
+function scheduleShadowSweep(pageFlip) {
+  if (sweepRaf) return;
+  sweepDeadline = Date.now() + 8000;
+
+  const step = () => {
+    const state = pageFlip?.getState?.();
+    const settling =
+      isFlipBookBusy(pageFlip) || state === 'fold_corner' || queuedTurns !== 0;
+
+    if (settling && Date.now() < sweepDeadline) {
+      sweepRaf = requestAnimationFrame(step);
+      return;
+    }
+
+    sweepRaf = 0;
+    settleFlipRender(pageFlip);
+  };
+
+  sweepRaf = requestAnimationFrame(step);
+}
+
 export function cancelQueuedFlips() {
   queuedTurns = 0;
   rushRung = 0;
+  if (sweepRaf) cancelAnimationFrame(sweepRaf);
+  sweepRaf = 0;
   activeTurnFinish = null;
   if (queueRaf) cancelAnimationFrame(queueRaf);
   queueRaf = 0;
@@ -785,6 +918,9 @@ function pumpQueue(pageFlip) {
  */
 export function requestFlip(pageFlip, direction = 'next') {
   if (!pageFlip) return;
+  flipLog('requestFlip', pageFlip, {
+    direction, queuedTurns, busy: isFlipBookBusy(pageFlip),
+  });
 
   if (!isFlipBookBusy(pageFlip)) {
     flipBook(pageFlip, direction);

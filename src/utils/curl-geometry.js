@@ -233,6 +233,67 @@ export function sampleFlipPath(pageW, pageH, t) {
   };
 }
 
+/**
+ * The part of the sheet that has NOT peeled yet, in page coordinates.
+ *
+ * `computeForwardBottomCurl` only describes the folded flap. Anything that
+ * draws the turning sheet needs this half too, otherwise whatever sits under
+ * the sheet shows through from the very first frame.
+ *
+ * The crease splits the page into two half-planes; the remainder is the page
+ * rect clipped to the half the lifted corner is not on.
+ */
+export function computeFlatRemainder(pageW, pageH, curl) {
+  if (!curl?.foldPage) return [];
+
+  const { a, b } = curl.foldPage;
+  const nx = -(b.y - a.y);
+  const ny = b.x - a.x;
+  const side = (p) => (p.x - a.x) * nx + (p.y - a.y) * ny;
+
+  // Anchor on the page's own bottom-right corner: it is the corner being
+  // lifted, so it stays on the folded side for the whole peel. curl.activeCorner
+  // is a vertex of the flap polygon, so it sits *on* the crease and its sign
+  // flips partway through — which swaps the two halves mid-animation.
+  const peelSide = side({ x: pageW, y: pageH });
+  if (Math.abs(peelSide) < 1e-9) return [];
+  const sign = peelSide > 0 ? -1 : 1;
+  const inside = (p) => side(p) * sign >= 0;
+
+  const crossing = (p, q) => {
+    const sp = side(p);
+    const d = sp - side(q);
+    if (Math.abs(d) < 1e-9) return p;
+    const tt = sp / d;
+    return { x: p.x + (q.x - p.x) * tt, y: p.y + (q.y - p.y) * tt };
+  };
+
+  // Sutherland–Hodgman against the single crease edge.
+  const poly = [
+    { x: 0, y: 0 },
+    { x: pageW, y: 0 },
+    { x: pageW, y: pageH },
+    { x: 0, y: pageH },
+  ];
+
+  const out = [];
+  for (let i = 0; i < poly.length; i++) {
+    const cur = poly[i];
+    const prev = poly[(i + poly.length - 1) % poly.length];
+    const curIn = inside(cur);
+    const prevIn = inside(prev);
+
+    if (curIn) {
+      if (!prevIn) out.push(crossing(prev, cur));
+      out.push(cur);
+    } else if (prevIn) {
+      out.push(crossing(prev, cur));
+    }
+  }
+
+  return out;
+}
+
 export function clipPathFromPoints(points) {
   if (!points?.length) return 'polygon(0% 0%, 0% 0%, 0% 0%)';
   return `polygon(${points.map((p) => `${p.x.toFixed(2)}px ${p.y.toFixed(2)}px`).join(', ')})`;

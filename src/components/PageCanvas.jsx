@@ -1,5 +1,6 @@
-import React, { useRef, useEffect, memo } from 'react';
+import React, { useRef, useEffect, useContext, memo } from 'react';
 import { usePageRenderer } from '../hooks/usePageRenderer';
+import { PageWindowContext } from './PageWindowContext';
 
 const PageCanvas = React.forwardRef(function PageCanvas(
   {
@@ -9,8 +10,6 @@ const PageCanvas = React.forwardRef(function PageCanvas(
     width,
     height,
     extraScale = 1,
-    priority = false,
-    shouldRender = true,
   },
   ref
 ) {
@@ -18,6 +17,18 @@ const PageCanvas = React.forwardRef(function PageCanvas(
   const { renderPageToCanvas } = usePageRenderer();
   const renderTaskRef = useRef(null);
   const isHardCover = pageNum === 1 || (numPages > 0 && pageNum === numPages);
+
+  // Read the window here rather than take it as a prop — see PageWindowContext.
+  const currentPage = useContext(PageWindowContext);
+  const i = pageNum - 1;
+  const priority =
+    Math.abs(currentPage - i) <= 1 ||
+    (currentPage === 0 && i <= 1) ||
+    (numPages > 0 && currentPage >= numPages - 2 && i >= numPages - 2);
+  const shouldRender =
+    Math.abs(currentPage - i) <= 3 ||
+    (currentPage === 0 && i <= 3) ||
+    (numPages > 0 && currentPage >= numPages - 3 && i >= numPages - 3);
 
   useEffect(() => {
     if (!pdfDocument || !canvasRef.current || !width || !height || !shouldRender) return;
