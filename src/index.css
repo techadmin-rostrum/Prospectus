@@ -544,14 +544,13 @@ body.flipbook-soft-curling {
   overflow: visible;
 }
 
-/* While turning: let the curl escape shell + avoid html overflow-x clipping */
-html.flipbook-turning,
-body.flipbook-turning {
-  overflow: visible !important;
-}
-
+/* The shell is viewport-sized, so cropping here still lets the curl paint across
+   the whole screen — it only stops it escaping past the window edge. `visible`
+   let the turning page inflate the document's scroll area (body grew ~1750x1040
+   inside a 1404x900 window), which flashed a scrollbar on every turn. `clip`
+   crops the same box without making the shell a scroll container. */
 .flipbook-shell.is-page-turning {
-  overflow: visible;
+  overflow: clip;
 }
 
 .flipbook-main.is-page-turning {
