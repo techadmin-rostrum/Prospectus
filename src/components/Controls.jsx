@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { trackEvent, EVENTS } from '../utils/analytics';
-import { flipBook, isFlipBookBusy } from '../utils/flipBook';
+import { requestFlip } from '../utils/flipBook';
 import { toggleImmersive, isFullscreenActive } from '../utils/fullscreen';
 
 const ARROW_IDLE_MS = 5000;
@@ -24,7 +24,6 @@ export default function Controls({
   isMobile = false,
   isShortLandscape = false,
   bookAreaRef,
-  isFlipping = false,
 }) {
   const resolveFlip = () => getPageFlip?.() || pageFlip;
   // Bottom dock only on portrait phones — short landscape uses side arrows
@@ -164,19 +163,10 @@ export default function Controls({
 
   const isFirstPage = currentPage === 0;
   const isLastPage = currentPage >= numPages - 1;
-  const navLocked = isFlipping;
 
-  const goPrev = () => {
-    const flip = resolveFlip();
-    if (!flip || isFlipBookBusy(flip)) return;
-    flipBook(flip, 'prev');
-  };
-
-  const goNext = () => {
-    const flip = resolveFlip();
-    if (!flip || isFlipBookBusy(flip)) return;
-    flipBook(flip, 'next');
-  };
+  // Stay clickable mid-turn — requestFlip queues instead of dropping the click.
+  const goPrev = () => requestFlip(resolveFlip(), 'prev');
+  const goNext = () => requestFlip(resolveFlip(), 'next');
 
   const onArrowEnter = () => {
     overArrowRef.current = true;
@@ -205,7 +195,7 @@ export default function Controls({
               <NavArrow
                 direction="prev"
                 onClick={goPrev}
-                disabled={isFirstPage || navLocked}
+                disabled={isFirstPage}
                 isMobile
                 docked
                 onMouseEnter={onArrowEnter}
@@ -214,7 +204,7 @@ export default function Controls({
               <NavArrow
                 direction="next"
                 onClick={goNext}
-                disabled={isLastPage || navLocked}
+                disabled={isLastPage}
                 isMobile
                 docked
                 onMouseEnter={onArrowEnter}
@@ -226,7 +216,7 @@ export default function Controls({
               <NavArrow
                 direction="prev"
                 onClick={goPrev}
-                disabled={isFirstPage || navLocked}
+                disabled={isFirstPage}
                 bookCenterY={bookCenterY}
                 isMobile={isMobile}
                 onMouseEnter={onArrowEnter}
@@ -235,7 +225,7 @@ export default function Controls({
               <NavArrow
                 direction="next"
                 onClick={goNext}
-                disabled={isLastPage || navLocked}
+                disabled={isLastPage}
                 bookCenterY={bookCenterY}
                 isMobile={isMobile}
                 onMouseEnter={onArrowEnter}
@@ -246,78 +236,78 @@ export default function Controls({
         )}
       </AnimatePresence>
 
-      <AnimatePresence>
-        {barVisible && (
-          <motion.div
-            key="bottom-bar"
-            initial={{ opacity: 0, y: 24 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 24 }}
-            transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
-            className={
-              docked
-                ? 'flipbook-controls-bar relative z-30 flex items-center rounded-full'
-                : 'flipbook-controls-bar fixed bottom-6 left-1/2 -translate-x-1/2 z-30 flex items-center rounded-full'
-            }
-            style={{
-              background: 'rgba(255,255,255,0.9)',
-              backdropFilter: 'blur(20px) saturate(180%)',
-              WebkitBackdropFilter: 'blur(20px) saturate(180%)',
-              border: '1px solid rgba(15,23,42,0.08)',
-              boxShadow: '0 8px 30px rgba(15,23,42,0.12), 0 2px 8px rgba(15,23,42,0.06)',
-              boxSizing: 'border-box',
-            }}
-            onMouseEnter={() => {
-              setBarVisible(true);
-              if (barHideTimerRef.current) clearTimeout(barHideTimerRef.current);
-            }}
-            onMouseLeave={() => {
-              if (barHideTimerRef.current) clearTimeout(barHideTimerRef.current);
-              barHideTimerRef.current = setTimeout(() => setBarVisible(false), 2000);
-            }}
-          >
-            <IconButton
-              icon={<IconGrid />}
-              label="Thumbnails"
-              onClick={() => { trackEvent(EVENTS.THUMBNAIL_OPEN); onOpenThumbnails(); }}
-            />
+      {/* Stays mounted while hidden: unmounting a docked bar collapses the
+          footer, which resizes the book and re-renders every page canvas. */}
+      <motion.div
+        key="bottom-bar"
+        initial={false}
+        animate={{ opacity: barVisible ? 1 : 0, y: barVisible ? 0 : 24 }}
+        transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
+        aria-hidden={!barVisible}
+        inert={!barVisible}
+        className={
+          docked
+            ? 'flipbook-controls-bar relative z-30 flex items-center rounded-full'
+            : 'flipbook-controls-bar fixed bottom-6 left-1/2 -translate-x-1/2 z-30 flex items-center rounded-full'
+        }
+        style={{
+          background: 'rgba(255,255,255,0.9)',
+          backdropFilter: 'blur(20px) saturate(180%)',
+          WebkitBackdropFilter: 'blur(20px) saturate(180%)',
+          border: '1px solid rgba(15,23,42,0.08)',
+          boxShadow: '0 8px 30px rgba(15,23,42,0.12), 0 2px 8px rgba(15,23,42,0.06)',
+          boxSizing: 'border-box',
+          pointerEvents: barVisible ? 'auto' : 'none',
+        }}
+        onMouseEnter={() => {
+          setBarVisible(true);
+          if (barHideTimerRef.current) clearTimeout(barHideTimerRef.current);
+        }}
+        onMouseLeave={() => {
+          if (barHideTimerRef.current) clearTimeout(barHideTimerRef.current);
+          barHideTimerRef.current = setTimeout(() => setBarVisible(false), 2000);
+        }}
+      >
+        <IconButton
+          icon={<IconGrid />}
+          label="Thumbnails"
+          onClick={() => { trackEvent(EVENTS.THUMBNAIL_OPEN); onOpenThumbnails(); }}
+        />
 
-            <Divider />
+        <Divider />
 
-            <form onSubmit={handlePageJump} className="flipbook-page-form flex items-center">
-              <input
-                type="text"
-                inputMode="numeric"
-                value={pageInput}
-                onChange={(e) => setPageInput(e.target.value)}
-                className="flipbook-page-input bg-slate-100 border border-slate-200 text-sm font-medium text-slate-900 focus:outline-none focus:border-brand-red focus:bg-white transition-colors font-mono"
-                style={{ textAlign: 'center', boxSizing: 'border-box' }}
-              />
-              <span className="flipbook-page-total text-slate-400 font-mono">
-                / {numPages}
-              </span>
-            </form>
+        <form onSubmit={handlePageJump} className="flipbook-page-form flex items-center">
+          <input
+            type="text"
+            inputMode="numeric"
+            value={pageInput}
+            onChange={(e) => setPageInput(e.target.value)}
+            className="flipbook-page-input bg-slate-100 border border-slate-200 text-sm font-medium text-slate-900 focus:outline-none focus:border-brand-red focus:bg-white transition-colors font-mono"
+            style={{ textAlign: 'center', boxSizing: 'border-box' }}
+          />
+          <span className="flipbook-page-total text-slate-400 font-mono">
+            / {numPages}
+          </span>
+        </form>
 
-            <Divider />
+        <Divider />
 
-            <IconButton
-              icon={isMuted ? <IconVolumeOff /> : <IconVolume2 />}
-              label={isMuted ? 'Unmute sound' : 'Mute sound'}
-              onClick={() => { toggleMute(); trackEvent(EVENTS.SOUND_TOGGLE, { muted: !isMuted }); }}
-            />
-            <IconButton
-              icon={<IconDownload />}
-              label="Download PDF"
-              onClick={handleDownload}
-            />
-            <IconButton
-              icon={isFullscreen ? <IconMinimize /> : <IconMaximize />}
-              label={isFullscreen ? 'Exit maximize' : 'Maximize'}
-              onClick={toggleFullscreen}
-            />
-          </motion.div>
-        )}
-      </AnimatePresence>
+        <IconButton
+          icon={isMuted ? <IconVolumeOff /> : <IconVolume2 />}
+          label={isMuted ? 'Unmute sound' : 'Mute sound'}
+          onClick={() => { toggleMute(); trackEvent(EVENTS.SOUND_TOGGLE, { muted: !isMuted }); }}
+        />
+        <IconButton
+          icon={<IconDownload />}
+          label="Download PDF"
+          onClick={handleDownload}
+        />
+        <IconButton
+          icon={isFullscreen ? <IconMinimize /> : <IconMaximize />}
+          label={isFullscreen ? 'Exit maximize' : 'Maximize'}
+          onClick={toggleFullscreen}
+        />
+      </motion.div>
     </>
   );
 }

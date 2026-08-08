@@ -248,6 +248,51 @@ html.flipbook-immersive body {
   background: #fff !important;
 }
 
+/* Soft interior curl (next R→L / prev mirrored L→R) */
+.flipbook-stage .portrait-soft-mirror,
+.flipbook-stage .portrait-prev-mirror {
+  overflow: visible !important;
+}
+
+.flipbook-stage .portrait-soft-leaf,
+.flipbook-stage .portrait-prev-leaf {
+  background: #fff !important;
+  -webkit-backface-visibility: visible;
+  backface-visibility: visible;
+  transform-style: flat;
+  overflow: visible !important;
+}
+
+.flipbook-stage .portrait-soft-leaf canvas,
+.flipbook-stage .portrait-soft-page canvas,
+.flipbook-stage .portrait-prev-leaf canvas,
+.flipbook-stage .portrait-prev-page canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+  background: #fff !important;
+}
+
+.flipbook-stage .portrait-soft-page,
+.flipbook-stage .portrait-prev-page {
+  overflow: hidden;
+  position: relative;
+  z-index: 1;
+}
+
+.flipbook-stage .portrait-soft-shade {
+  mix-blend-mode: soft-light;
+}
+
+.flipbook-stage .portrait-soft-page-shade {
+  mix-blend-mode: multiply;
+}
+
+.flipbook-stage .portrait-soft-cast {
+  z-index: 1;
+  pointer-events: none;
+}
+
 /*
   Soft page turns use clip-path + 2D rotate.
   backface-visibility / preserve-3d on soft items breaks that and makes
@@ -303,6 +348,26 @@ html.flipbook-immersive body {
 .flipbook-main.is-turning {
   overflow: visible;
   z-index: 30;
+}
+
+/* Soft curl: keep peel painting, but never open a document scrollbar */
+html.flipbook-soft-curling,
+body.flipbook-soft-curling {
+  overflow: hidden !important;
+  overscroll-behavior: none;
+}
+
+.flipbook-shell:has(.is-soft-curling) {
+  overflow: hidden !important;
+}
+
+.flipbook-main.is-turning.is-soft-curling {
+  overflow: hidden !important;
+}
+
+.flipbook-stage.is-flipping.is-soft-curling {
+  /* Clip vertical overflow that was spawning the scrollbar; peel still reads. */
+  overflow: hidden !important;
 }
 
 .flipbook-stage {

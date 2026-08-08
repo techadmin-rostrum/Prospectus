@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate, useLocation } from 'react-router';
 import HTMLFlipBook from 'react-pageflip';
 import { motion } from 'motion/react';
@@ -8,7 +8,7 @@ import { usePageRenderer } from '../hooks/usePageRenderer';
 import { useSound } from '../hooks/useSound';
 import { trackEvent, EVENTS } from '../utils/analytics';
 import { syncFlipCanvases, startFlipCanvasSync } from '../utils/syncFlipCanvases';
-import { flipBook, applyFlipDuration, isFlipBookBusy } from '../utils/flipBook';
+import { requestFlip, cancelQueuedFlips, applyFlipDuration } from '../utils/flipBook';
 import {
   enterImmersive,
   isFullscreenActive,
@@ -56,7 +56,7 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
   const stopCanvasSyncRef = useRef(null);
 
   // Interior turns. Cover open on mobile uses a custom door animation in flipBook.
-  const PAGE_FLIP_MS = isMobile ? 1400 : 900;
+  const PAGE_FLIP_MS = isMobile ? 2200 : 900;
   const COVER_FLIP_MS = isMobile ? 1400 : 1200;
   const prefersReducedMotion =
     typeof window !== 'undefined' &&
@@ -295,6 +295,8 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
     // Landscape+showCover leaves the back cover alone, so the last interior
     // spread starts at lastIndex-2 (e.g. pages 63–64 → close onto 65). A plain
     // `currentPage >= numPages-2` misses that and plays a page-turn rustle.
+    // Mobile blank-padded spreads also land last interior at pdf lastIndex-1
+    // with display leaf lastDisplay-2.
     const lastIndex = Math.max(numPages - 1, 0);
     const flipApi = bookRef.current?.pageFlip?.();
     const dir = flipApi?.getRender?.()?.getDirection?.();
@@ -351,7 +353,10 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
       stopCanvasSyncRef.current?.();
       stopCanvasSyncRef.current = null;
       syncFlipCanvases(bookStageRef.current || document);
-      mainRef.current?.classList.remove('is-cover-turning', 'is-cover-turning--back');
+      mainRef.current?.classList.remove(
+        'is-cover-turning',
+        'is-cover-turning--back'
+      );
       // Crossing the cover/interior boundary makes page-flip force both pages
       // to draw hard, and it never puts them back. Restore created density so
       // the next soft turn curls like paper instead of a rigid board — but
@@ -413,10 +418,10 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
 
       switch(e.key) {
         case 'ArrowRight':
-          if (!isFlipBookBusy(flip)) flipBook(flip, 'next');
+          requestFlip(flip, 'next');
           break;
         case 'ArrowLeft':
-          if (!isFlipBookBusy(flip)) flipBook(flip, 'prev');
+          requestFlip(flip, 'prev');
           break;
         case '=':
         case '+':
@@ -436,7 +441,10 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
   }, []);
 
   useEffect(() => {
-    return () => clearCache();
+    return () => {
+      cancelQueuedFlips();
+      clearCache();
+    };
   }, [clearCache]);
 
   // Keep nav arrows vertically centered on the book stage (not the viewport)
@@ -526,7 +534,9 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
 
   return (
     <div
-      className={`flipbook-shell flipbook-shell--${theme} flex flex-col relative overflow-hidden`}
+      className={`flipbook-shell flipbook-shell--${theme} flex flex-col relative overflow-hidden${
+        isFlipping ? ' is-page-turning' : ''
+      }`}
     >
       <div
         className="absolute inset-0 pointer-events-none select-none overflow-hidden z-0"
@@ -800,7 +810,6 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
             isMobile={isMobile}
             isShortLandscape={isShortLandscape}
             bookAreaRef={mainRef}
-            isFlipping={isFlipping}
           />
         )}
       </footer>
