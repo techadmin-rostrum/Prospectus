@@ -1,15 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
-import { getCachedPdf, setCachedPdf, destroyCachedPdf } from '../utils/pdfCache';
+import { setCachedPdf, destroyCachedPdf, destroyAllCachedPdfs } from '../utils/pdfCache';
 
-// Configure PDF.js worker — load from our structured static copy
 pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdfjs-dist/build/pdf.worker.min.mjs';
 
-/**
- * Progressive PDF load options.
- * PDFs are linearized — with range requests + disableAutoFetch, pdf.js can
- * open after the first chunks and only fetch bytes for pages you render.
- */
 export const PDF_LOAD_OPTIONS = {
   cMapUrl: '/pdfjs-dist/cmaps/',
   cMapPacked: true,
@@ -24,20 +18,73 @@ export const PDF_LOAD_OPTIONS = {
 
 const DEFAULT_ASPECT = 842 / 595;
 
-/** Reject cached docs that can no longer serve page 1 (stale after iOS teardown). */
-async function cachedDocIsUsable(doc) {
-  if (!doc || typeof doc.getPage !== 'function') return false;
-  try {
-    const page = await doc.getPage(1);
-    const viewport = page.getViewport({ scale: 0.05 });
-    return viewport.width > 0 && viewport.height > 0;
-  } catch {
-    return false;
-  }
+/**
+ * Serialize getDocument across the app. Overlapping opens of UG + PG on the
+ * single shared worker were cross-painting prospectuses after several switches.
+ */
+let loadChain = Promise.resolve();
+
+function enqueueDocumentLoad(pdfSrc) {
+  let loadingTask = null;
+  let cancelled = false;
+
+  const promise = new Promise((resolve, reject) => {
+    loadChain = loadChain
+      .catch(() => {})
+      .then(async () => {
+        if (cancelled) {
+          resolve(null);
+          return;
+        }
+        loadingTask = pdfjsLib.getDocument({
+          url: pdfSrc,
+          ...PDF_LOAD_OPTIONS,
+        });
+        try {
+          const doc = await loadingTask.promise;
+          if (cancelled) {
+            try {
+              doc.destroy?.();
+            } catch {
+              /* ignore */
+            }
+            resolve(null);
+            return;
+          }
+          resolve(doc);
+        } catch (err) {
+          if (!cancelled) reject(err);
+          else resolve(null);
+        }
+      });
+  });
+
+  return {
+    promise,
+    onProgress(handler) {
+      const tryAttach = () => {
+        if (loadingTask) {
+          loadingTask.onProgress = handler;
+          return;
+        }
+        if (!cancelled) queueMicrotask(tryAttach);
+      };
+      tryAttach();
+    },
+    destroy() {
+      cancelled = true;
+      try {
+        loadingTask?.destroy?.();
+      } catch {
+        /* ignore */
+      }
+    },
+  };
 }
 
 /**
- * Hook to load and cache a PDF document via pdfjs-dist.
+ * Always fresh getDocument for this pdfSrc — never reopen a prior session's
+ * PDFDocumentProxy (that caused white pages / wrong-book leaks on iOS).
  */
 export function usePdfDocument(pdfSrc) {
   const [pdfDocument, setPdfDocument] = useState(null);
@@ -48,110 +95,86 @@ export function usePdfDocument(pdfSrc) {
   const [error, setError] = useState(null);
 
   const documentRef = useRef(null);
+  const loadIdRef = useRef(0);
 
   useEffect(() => {
     if (!pdfSrc) return;
 
+    destroyAllCachedPdfs();
+
+    const loadId = ++loadIdRef.current;
     let cancelled = false;
-    let loadingTask = null;
+    const task = enqueueDocumentLoad(pdfSrc);
 
-    const applyDoc = (doc) => {
-      documentRef.current = doc;
-      setPdfDocument(doc);
-      setNumPages(doc.numPages);
-      setAspectRatio(DEFAULT_ASPECT);
-      setLoading(false);
-      setProgress(100);
-      setError(null);
-    };
+    setLoading(true);
+    setProgress(8);
+    setError(null);
+    setPdfDocument(null);
+    setNumPages(0);
+    documentRef.current = null;
 
-    const loadFromNetwork = async () => {
-      setLoading(true);
-      setProgress(8);
-      setError(null);
-      setPdfDocument(null);
-      setNumPages(0);
+    task.onProgress(({ loaded, total }) => {
+      if (cancelled || loadId !== loadIdRef.current) return;
+      if (total > 0) {
+        const pct = Math.min(92, Math.round((loaded / total) * 100));
+        setProgress((prev) => Math.max(prev, pct));
+      } else if (loaded > 0) {
+        setProgress((prev) => (prev < 85 ? Math.max(prev, 20) : prev));
+      }
+    });
 
-      loadingTask = pdfjsLib.getDocument({
-        url: pdfSrc,
-        ...PDF_LOAD_OPTIONS,
-      });
-
-      loadingTask.onProgress = ({ loaded, total }) => {
-        if (cancelled) return;
-        if (total > 0) {
-          const pct = Math.min(92, Math.round((loaded / total) * 100));
-          setProgress((prev) => Math.max(prev, pct));
-        } else if (loaded > 0) {
-          setProgress((prev) => (prev < 85 ? Math.max(prev, 20) : prev));
+    (async () => {
+      try {
+        const doc = await task.promise;
+        if (cancelled || loadId !== loadIdRef.current || !doc) {
+          if (doc && (cancelled || loadId !== loadIdRef.current)) {
+            try {
+              doc.destroy?.();
+            } catch {
+              /* ignore */
+            }
+          }
+          return;
         }
-      };
 
-      const doc = await loadingTask.promise;
-      if (cancelled) {
+        setCachedPdf(pdfSrc, doc);
+        documentRef.current = doc;
+        setPdfDocument(doc);
+        setNumPages(doc.numPages);
+        setAspectRatio(DEFAULT_ASPECT);
+        setLoading(false);
+        setProgress(100);
+        setError(null);
+
+        doc.getPage(1).then((firstPage) => {
+          if (cancelled || loadId !== loadIdRef.current) return;
+          const viewport = firstPage.getViewport({ scale: 1 });
+          if (viewport.width > 0 && viewport.height > 0) {
+            setAspectRatio(viewport.width / viewport.height);
+          }
+        }).catch(() => {});
+      } catch (err) {
+        if (cancelled || loadId !== loadIdRef.current) return;
+        console.error('[usePdfDocument] Failed to load PDF:', err);
+        setError(err.message || 'Failed to load PDF');
+        setLoading(false);
         try {
-          doc.destroy?.();
+          window.__flipbookReportFatal?.(
+            'PDF failed to load',
+            `${pdfSrc}: ${err.message || err}`,
+            err.stack
+          );
         } catch {
           /* ignore */
         }
-        return;
       }
-
-      setCachedPdf(pdfSrc, doc);
-      applyDoc(doc);
-
-      doc.getPage(1).then((firstPage) => {
-        if (cancelled) return;
-        const viewport = firstPage.getViewport({ scale: 1 });
-        if (viewport.width > 0 && viewport.height > 0) {
-          setAspectRatio(viewport.width / viewport.height);
-        }
-      }).catch(() => {});
-    };
-
-    const loadPdf = async () => {
-      try {
-        // Warm handoff from landing — only if the doc still answers getPage(1).
-        const cached = getCachedPdf(pdfSrc);
-        if (cached) {
-          const ok = await cachedDocIsUsable(cached);
-          if (cancelled) return;
-          if (ok) {
-            applyDoc(cached);
-            return;
-          }
-          // Stale after a previous Flipbook session on iOS — drop and reload.
-          destroyCachedPdf(pdfSrc);
-        }
-
-        await loadFromNetwork();
-      } catch (err) {
-        if (!cancelled) {
-          console.error('[usePdfDocument] Failed to load PDF:', err);
-          setError(err.message || 'Failed to load PDF');
-          setLoading(false);
-          try {
-            window.__flipbookReportFatal?.(
-              'PDF failed to load',
-              `${pdfSrc}: ${err.message || err}`,
-              err.stack
-            );
-          } catch {
-            /* ignore */
-          }
-        }
-      }
-    };
-
-    loadPdf();
+    })();
 
     return () => {
       cancelled = true;
-      try {
-        loadingTask?.destroy?.();
-      } catch {
-        // ignore
-      }
+      task.destroy();
+      documentRef.current = null;
+      destroyCachedPdf(pdfSrc);
     };
   }, [pdfSrc]);
 

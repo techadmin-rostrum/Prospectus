@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react';
 import { useNavigate, useLocation } from 'react-router';
 import HTMLFlipBook from 'react-pageflip';
 import { motion } from 'motion/react';
@@ -15,7 +15,7 @@ import {
   isPhoneViewport,
   syncAppHeight,
 } from '../utils/fullscreen';
-import { destroyCachedPdf } from '../utils/pdfCache';
+import { destroyCachedPdf, destroyAllCachedPdfs } from '../utils/pdfCache';
 
 import { instrumentPageFlip, flipLog } from '../utils/flipDebug';
 
@@ -466,14 +466,16 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  // Tear down this prospectus's PDFDocumentProxy on leave. Reusing it on iOS
-  // after canvas release/cancel left UG blank on every 2nd+ open while PG
-  // (opened fresh more often) still looked fine.
-  useEffect(() => {
+  // Wipe bitmaps + any leftover PDF proxies when entering/leaving so UG/PG
+  // never share worker docs or canvas cache entries across visits.
+  useLayoutEffect(() => {
+    clearCache();
+    destroyAllCachedPdfs();
     return () => {
       cancelQueuedFlips();
       clearCache();
       destroyCachedPdf(pdfSrc);
+      destroyAllCachedPdfs();
     };
   }, [pdfSrc, clearCache]);
 

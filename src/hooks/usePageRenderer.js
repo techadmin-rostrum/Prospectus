@@ -150,7 +150,7 @@ export function usePageRenderer() {
       const generationAtStart = cacheGeneration;
 
       const cached = cacheRef.current.get(cacheKey);
-      if (cacheEntryUsable(cached)) {
+      if (cacheEntryUsable(cached) && cached.pdfSrc === pdfSrc) {
         if (paintCachedToCanvas(cached, canvas, viewport, containerWidth, containerHeight)) {
           markCanvasLive(pageNum);
           return true;
@@ -182,7 +182,7 @@ export function usePageRenderer() {
         }
         if (generationAtStart !== cacheGeneration) return false;
         const ready = cacheRef.current.get(cacheKey);
-        if (cacheEntryUsable(ready)) {
+        if (cacheEntryUsable(ready) && ready.pdfSrc === pdfSrc) {
           if (paintCachedToCanvas(ready, canvas, viewport, containerWidth, containerHeight)) {
             markCanvasLive(pageNum);
             return true;

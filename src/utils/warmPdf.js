@@ -1,16 +1,14 @@
 /**
- * Speculatively open a prospectus so clicking through feels instant.
+ * Speculative warm for a prospectus.
  *
- * This used to be a `<link rel="prefetch" as="fetch">`, which pulled the whole
- * 27–36 MB file — bytes pdf.js then couldn't reuse, because it fetches the
- * document through Range requests. Opening it through pdf.js instead warms the
- * exact same cache the viewer reads from, and only pulls the first-page ranges.
+ * IMPORTANT: Do NOT open the file through pdf.js here. Concurrent getDocument()
+ * calls on the shared worker (landing warm + Flipbook load, or UG + PG) can
+ * cross-wire page streams on iOS — after enough UG↔PG switches the wrong book
+ * paints. We only touch the HTTP cache via a Range fetch; Flipbook always owns
+ * getDocument().
  */
-import { getCachedPdf, setCachedPdf } from './pdfCache';
-
 const inFlight = new Set();
 
-/** Skip speculative work on metered or very slow connections. */
 function shouldWarm() {
   const conn = navigator.connection;
   if (!conn) return true;
@@ -19,22 +17,20 @@ function shouldWarm() {
 }
 
 export async function warmPdf(pdfSrc) {
-  if (!pdfSrc || getCachedPdf(pdfSrc) || inFlight.has(pdfSrc)) return;
+  if (!pdfSrc || inFlight.has(pdfSrc)) return;
   if (!shouldWarm()) return;
 
   inFlight.add(pdfSrc);
   try {
-    const [pdfjsLib, { PDF_LOAD_OPTIONS }] = await Promise.all([
-      import('pdfjs-dist'),
-      import('../hooks/usePdfDocument'),
-    ]);
-
-    pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdfjs-dist/build/pdf.worker.min.mjs';
-
-    const doc = await pdfjsLib.getDocument({ url: pdfSrc, ...PDF_LOAD_OPTIONS }).promise;
-    setCachedPdf(pdfSrc, doc);
+    // Linearized header + first object stream — enough for a fast first paint
+    // once Flipbook calls getDocument (browser/CDN reuses these bytes).
+    await fetch(pdfSrc, {
+      method: 'GET',
+      headers: { Range: 'bytes=0-262143' },
+      credentials: 'same-origin',
+    });
   } catch {
-    // Warming is best-effort — the viewer will just load it normally.
+    // Best-effort only
   } finally {
     inFlight.delete(pdfSrc);
   }

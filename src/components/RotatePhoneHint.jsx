@@ -21,7 +21,7 @@ export default function RotatePhoneHint({ visible }) {
       // iOS (and some desktops) — show a clear manual instruction
       setToast(
         isIOS()
-          ? 'Rotate your iPhone sideways'
+          ? 'Rotate your iPhone sideways'   
           : 'Rotate your phone sideways'
       );
       window.setTimeout(() => setToast(null), 2800);

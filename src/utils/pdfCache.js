@@ -1,40 +1,42 @@
 /**
- * Shared in-memory PDF document cache.
- * Landing-page warm → Flipbook handoff only. Documents must NOT survive Flipbook
- * unmount on iOS — reusing a PDFDocumentProxy after the viewer tears down its
- * renders leaves blank canvases on the next open (seen as UG→PG→UG white).
+ * PDFDocumentProxy cache — short-lived only.
+ * Prefer destroy-on-leave; do not hand documents across Flipbook sessions.
  */
 const cache = new Map();
 
 export function getCachedPdf(url) {
-  return cache.get(url) || null;
+  const entry = cache.get(url);
+  if (!entry) return null;
+  // Guard against accidental cross-wiring of URL → doc
+  if (entry.url !== url) {
+    cache.delete(url);
+    return null;
+  }
+  return entry.doc;
 }
 
 export function setCachedPdf(url, doc) {
   if (!url || !doc) return;
   const prev = cache.get(url);
-  if (prev && prev !== doc) {
+  if (prev?.doc && prev.doc !== doc) {
     try {
-      prev.destroy?.();
+      prev.doc.destroy?.();
     } catch {
       /* ignore */
     }
   }
-  cache.set(url, doc);
+  cache.set(url, { url, doc });
 }
 
 export function peekCachedPdf(url) {
   return cache.has(url);
 }
 
-/**
- * Drop and destroy a cached document. Call when leaving the Flipbook so the
- * next visit always gets a fresh getDocument() (HTTP cache still helps).
- */
 export function destroyCachedPdf(url) {
   if (!url) return;
-  const doc = cache.get(url);
+  const entry = cache.get(url);
   cache.delete(url);
+  const doc = entry?.doc;
   if (!doc) return;
   try {
     doc.cleanup?.();
