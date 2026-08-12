@@ -1,16 +1,50 @@
 import { useRef, useCallback } from 'react';
+import {
+  getLiveCanvasCount,
+  logCanvasPixelCap,
+  markCanvasLive,
+  releaseCanvasElement,
+  trackRenderTask,
+  untrackRenderTask,
+} from '../utils/canvasMemory';
 
 /**
  * Hook for rendering PDF pages to canvas with high-DPI support and caching.
- * 
+ *
  * Implements a "render on demand + cache" strategy:
  * - Renders pages at devicePixelRatio scale for retina crispness
+ * - Caps each canvas under WebKit's ~16.7M pixel hard limit
  * - Caches rendered bitmaps to avoid re-rendering
  * - Evicts pages outside a ±4 window to prevent OOM
  * - Supports re-rendering at higher scale for zoom
  */
+
+/** Safety margin under WebKit's 16,777,216 hard canvas-pixel ceiling. */
+export const MAX_CANVAS_PIXELS = 16_000_000;
+
 const globalCache = new Map();
 const globalRendering = new Set();
+/** Dedupe cap-hit beacons per page+scale within a session. */
+const capHitLogged = new Set();
+
+/**
+ * Fit `desiredScale` so width×height of the PDF viewport stays under MAX_CANVAS_PIXELS.
+ * Returns { scale, viewport, rawPixels, capped }.
+ */
+export function clampRenderScale(page, desiredScale) {
+  let scale = desiredScale;
+  let viewport = page.getViewport({ scale });
+  const rawPixels = viewport.width * viewport.height;
+
+  if (rawPixels <= MAX_CANVAS_PIXELS || rawPixels <= 0) {
+    return { scale, viewport, rawPixels, capped: false };
+  }
+
+  // Area scales with scale² — shrink uniformly to fit the budget.
+  scale = desiredScale * Math.sqrt(MAX_CANVAS_PIXELS / rawPixels);
+  viewport = page.getViewport({ scale });
+  return { scale, viewport, rawPixels, capped: true };
+}
 
 export function usePageRenderer() {
   // Use global cache to share across all PageCanvas instances
@@ -19,12 +53,12 @@ export function usePageRenderer() {
 
   /**
    * Render a PDF page onto a canvas element at the specified scale.
-   * Uses devicePixelRatio for HiDPI rendering.
-   * 
+   * Uses devicePixelRatio for HiDPI rendering, clamped to WebKit's pixel budget.
+   *
    * @param {PDFPageProxy} page - PDF.js page object
    * @param {HTMLCanvasElement} canvas - Target canvas element
    * @param {number} containerWidth - Desired display width in CSS pixels
-   * @param {number} containerHeight - Desired display height in CSS pixels  
+   * @param {number} containerHeight - Desired display height in CSS pixels
    * @param {number} [extraScale=1] - Additional scale multiplier (for zoom)
    * @returns {Promise<void>}
    */
@@ -41,8 +75,29 @@ export function usePageRenderer() {
     const scaleY = containerHeight / unscaledViewport.height;
     const baseScale = Math.min(scaleX, scaleY);
 
-    // Final render scale: base fit × DPR × any extra zoom
-    const renderScale = baseScale * dpr * extraScale;
+    // Desired render scale: base fit × DPR × any extra zoom
+    const desiredScale = baseScale * dpr * extraScale;
+    const { scale: renderScale, viewport, rawPixels, capped } = clampRenderScale(
+      page,
+      desiredScale
+    );
+
+    if (capped) {
+      const key = `${pageNum}:${Math.round(rawPixels)}`;
+      if (!capHitLogged.has(key)) {
+        capHitLogged.add(key);
+        logCanvasPixelCap({
+          pageNum,
+          rawPixels: Math.round(rawPixels),
+          safePixels: Math.round(viewport.width * viewport.height),
+          maxCanvasPixels: MAX_CANVAS_PIXELS,
+          desiredScale: Number(desiredScale.toFixed(4)),
+          safeScale: Number(renderScale.toFixed(4)),
+          liveCanvasCount: getLiveCanvasCount(),
+        });
+      }
+    }
+
     const cacheKey = `${pageNum}-${renderScale.toFixed(2)}`;
 
     // Check if already rendering this exact configuration
@@ -51,74 +106,100 @@ export function usePageRenderer() {
     // Check cache
     const cached = cacheRef.current.get(cacheKey);
     if (cached) {
-      // Draw cached bitmap to canvas
-      const viewport = page.getViewport({ scale: renderScale });
+      // Draw at the *capped* dimensions — same as the cache entry was built with
       canvas.width = viewport.width;
       canvas.height = viewport.height;
       canvas.style.width = `${containerWidth}px`;
       canvas.style.height = `${containerHeight}px`;
 
       const ctx = canvas.getContext('2d');
+      // createImageBitmap can fail on some iOS / Lockdown Mode builds — we also
+      // cache a canvas copy so a null bitmap never paints a blank page on hit.
       if (cached.bitmap) {
         ctx.drawImage(cached.bitmap, 0, 0);
+      } else if (cached.canvas) {
+        ctx.drawImage(cached.canvas, 0, 0);
       }
+      markCanvasLive(pageNum);
       return;
     }
 
-      renderingRef.current.add(cacheKey);
+    renderingRef.current.add(cacheKey);
 
+    let tempCanvas = null;
+    try {
+      // Render to an offscreen/temp canvas first so we don't clear the visible canvas
+      // while the slow rendering process happens (prevents flashing blank/blurry).
+      // tempCanvas uses the *capped* viewport — same dimensions as the display canvas.
+      tempCanvas = document.createElement('canvas');
+      tempCanvas.width = viewport.width;
+      tempCanvas.height = viewport.height;
+      const ctx = tempCanvas.getContext('2d', { alpha: false });
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
+
+      const renderTask = page.render({
+        canvasContext: ctx,
+        viewport,
+        background: 'rgb(255,255,255)',
+      });
+      trackRenderTask(pageNum, renderTask);
       try {
-        const viewport = page.getViewport({ scale: renderScale });
-        
-        // Render to an offscreen/temp canvas first so we don't clear the visible canvas
-        // while the slow rendering process happens (prevents flashing blank/blurry).
-        const tempCanvas = document.createElement('canvas');
-        tempCanvas.width = viewport.width;
-        tempCanvas.height = viewport.height;
-        const ctx = tempCanvas.getContext('2d', { alpha: false });
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
-
-        await page.render({
-          canvasContext: ctx,
-          viewport,
-          background: 'rgb(255,255,255)',
-        }).promise;
-
-        let bitmap = null;
-        try {
-          bitmap = await createImageBitmap(tempCanvas);
-        } catch {
-          // Fallback if ImageBitmap is not supported
-        }
-
-        cacheRef.current.set(cacheKey, { bitmap, scale: renderScale });
-
-        // Now draw to the real canvas
-        canvas.width = viewport.width;
-        canvas.height = viewport.height;
-        canvas.style.width = `${containerWidth}px`;
-        canvas.style.height = `${containerHeight}px`;
-        
-        const realCtx = canvas.getContext('2d', { alpha: false });
-        if (bitmap) {
-          realCtx.drawImage(bitmap, 0, 0);
-        } else {
-          realCtx.drawImage(tempCanvas, 0, 0);
-        }
-      } catch (err) {
-        if (err.name !== 'RenderingCancelledException') {
-          console.error(`[usePageRenderer] Error rendering page ${pageNum}:`, err);
-        }
+        await renderTask.promise;
       } finally {
-        renderingRef.current.delete(cacheKey);
+        untrackRenderTask(pageNum, renderTask);
       }
+
+      let bitmap = null;
+      try {
+        bitmap = await createImageBitmap(tempCanvas);
+      } catch {
+        // Fallback if ImageBitmap is not supported (older / lockdown iOS)
+      }
+
+      // Fallback copy is always at capped dimensions (tempCanvas), never uncapped.
+      let canvasCopy = null;
+      if (!bitmap) {
+        canvasCopy = document.createElement('canvas');
+        canvasCopy.width = tempCanvas.width;
+        canvasCopy.height = tempCanvas.height;
+        canvasCopy.getContext('2d', { alpha: false }).drawImage(tempCanvas, 0, 0);
+      }
+
+      cacheRef.current.set(cacheKey, {
+        bitmap,
+        canvas: canvasCopy,
+        scale: renderScale,
+      });
+
+      // Now draw to the real canvas at capped size
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+      canvas.style.width = `${containerWidth}px`;
+      canvas.style.height = `${containerHeight}px`;
+
+      const realCtx = canvas.getContext('2d', { alpha: false });
+      if (bitmap) {
+        realCtx.drawImage(bitmap, 0, 0);
+      } else {
+        realCtx.drawImage(tempCanvas, 0, 0);
+      }
+      markCanvasLive(pageNum);
+    } catch (err) {
+      if (err.name !== 'RenderingCancelledException') {
+        console.error(`[usePageRenderer] Error rendering page ${pageNum}:`, err);
+      }
+    } finally {
+      renderingRef.current.delete(cacheKey);
+      // Drop the temp backing store immediately — WebKit won't GC it otherwise.
+      if (tempCanvas) releaseCanvasElement(tempCanvas);
+    }
   }, []);
 
   /**
    * Evict cache entries for pages outside the active window.
    * Call this when the current page changes.
-   * 
+   *
    * @param {number} currentPage - Currently displayed page number
    * @param {number} windowSize - Number of pages to keep on each side (default: 4)
    */
@@ -129,6 +210,10 @@ export function usePageRenderer() {
       if (Math.abs(pageNum - currentPage) > windowSize) {
         if (value.bitmap) {
           value.bitmap.close(); // Free ImageBitmap memory
+        }
+        if (value.canvas) {
+          releaseCanvasElement(value.canvas);
+          value.canvas = null;
         }
         cache.delete(key);
       }
@@ -143,6 +228,10 @@ export function usePageRenderer() {
     for (const [, value] of cache.entries()) {
       if (value.bitmap) {
         value.bitmap.close();
+      }
+      if (value.canvas) {
+        releaseCanvasElement(value.canvas);
+        value.canvas = null;
       }
     }
     cache.clear();

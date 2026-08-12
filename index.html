@@ -164,6 +164,33 @@
           }
         }
 
+        function postLog(title, message, stack) {
+          // Same-origin Vercel function — works even when the React bundle never loads.
+          try {
+            var payload = JSON.stringify({
+              title: title,
+              message: String(message == null ? '' : message),
+              stack: stack ? String(stack) : '',
+              url: location.href,
+              userAgent: navigator.userAgent,
+              time: new Date().toISOString()
+            });
+            if (navigator.sendBeacon) {
+              navigator.sendBeacon(
+                '/api/client-error-log',
+                new Blob([payload], { type: 'application/json' })
+              );
+            } else {
+              fetch('/api/client-error-log', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: payload,
+                keepalive: true
+              }).catch(function () {});
+            }
+          } catch (e) { /* ignore */ }
+        }
+
         function report(title, message, stack) {
           // Don't let a broken overlay hide the original failure.
           try {
@@ -171,6 +198,7 @@
               if (reports[i].title === title && reports[i].message === message) return;
             }
             reports.push({ title: title, message: String(message), stack: stack ? String(stack) : '' });
+            postLog(title, message, stack);
             if (document.body) render();
             else document.addEventListener('DOMContentLoaded', render);
           } catch (e) { /* nothing left to do */ }

@@ -110,6 +110,15 @@ export function usePdfDocument(pdfSrc) {
           console.error('[usePdfDocument] Failed to load PDF:', err);
           setError(err.message || 'Failed to load PDF');
           setLoading(false);
+          try {
+            window.__flipbookReportFatal?.(
+              'PDF failed to load',
+              `${pdfSrc}: ${err.message || err}`,
+              err.stack
+            );
+          } catch {
+            /* ignore */
+          }
         }
       }
     };

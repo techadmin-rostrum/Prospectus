@@ -21,6 +21,7 @@ export default class ErrorBoundary extends Component {
       .filter(Boolean)
       .join('\n\n');
 
+    // Overlay (index.html) + POST /api/client-error-log (wired in main.jsx)
     window.__flipbookReportFatal?.(
       this.props.label ? `Crash in ${this.props.label}` : 'The page crashed while rendering',
       error?.message || String(error),

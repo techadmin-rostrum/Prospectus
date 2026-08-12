@@ -25,6 +25,8 @@ export default defineConfig({
     pdfRangePlugin(),
   ],
   build: {
+    // Safari 15+ (iOS 15). Older iPhones on iOS 14 and below will fail to parse
+    // the bundle — lower to 'es2020' / add a browserslist if you must support them.
     target: 'es2022',
   },
   server: {
