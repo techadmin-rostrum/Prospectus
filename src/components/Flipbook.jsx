@@ -15,7 +15,8 @@ import {
   isPhoneViewport,
   syncAppHeight,
 } from '../utils/fullscreen';
-import { destroyCachedPdf, destroyAllCachedPdfs } from '../utils/pdfCache';
+import { destroyCachedPdf } from '../utils/pdfCache';
+import { closePdfDocument } from '../utils/pdfSession';
 
 import { instrumentPageFlip, flipLog } from '../utils/flipDebug';
 
@@ -466,16 +467,16 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  // Wipe bitmaps + any leftover PDF proxies when entering/leaving so UG/PG
-  // never share worker docs or canvas cache entries across visits.
+  // Clear canvas bitmaps on enter/leave only — PDF worker lifecycle lives in
+  // usePdfDocument/pdfSession (awaited destroy). Mount-time destroyAll was
+  // racing the next getDocument and made single-switch leaks worse.
   useLayoutEffect(() => {
     clearCache();
-    destroyAllCachedPdfs();
     return () => {
       cancelQueuedFlips();
       clearCache();
-      destroyCachedPdf(pdfSrc);
-      destroyAllCachedPdfs();
+      const doc = destroyCachedPdf(pdfSrc);
+      closePdfDocument(doc);
     };
   }, [pdfSrc, clearCache]);
 

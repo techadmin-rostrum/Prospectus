@@ -2,6 +2,7 @@ import React, { useRef, useEffect, useContext, memo } from 'react';
 import { usePageRenderer } from '../hooks/usePageRenderer';
 import { PageWindowContext } from './PageWindowContext';
 import { releasePageResources } from '../utils/canvasMemory';
+import { assertDocMatchesSrc } from '../utils/pdfSession';
 
 /** Paint live pixels inside this radius of the current page. */
 const RENDER_RADIUS = 3;
@@ -92,8 +93,11 @@ const PageCanvas = React.forwardRef(function PageCanvas(
       if (!canvasRef.current) return;
 
       try {
+        if (!assertDocMatchesSrc(pdfDocument, pdfSrc)) return;
+
         const page = await pdfDocument.getPage(pageNum);
         if (cancelled || genAtSchedule !== releaseGenRef.current) return;
+        if (!assertDocMatchesSrc(pdfDocument, pdfSrc)) return;
 
         let painted = await renderPageToCanvas(
           page,
