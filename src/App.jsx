@@ -29,7 +29,8 @@ function Viewer({ pdfSrc, title, theme }) {
   return (
     <ErrorBoundary label="the prospectus viewer">
       <Suspense fallback={<ViewerFallback theme={theme} />}>
-        <Flipbook pdfSrc={pdfSrc} title={title} theme={theme} />
+        {/* key forces a clean remount when switching UG ↔ PG */}
+        <Flipbook key={pdfSrc} pdfSrc={pdfSrc} title={title} theme={theme} />
       </Suspense>
     </ErrorBoundary>
   );

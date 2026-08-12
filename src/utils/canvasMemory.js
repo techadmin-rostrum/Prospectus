@@ -3,7 +3,10 @@ import { reportClientError } from './clientErrorLog';
 /** Pages with a non-released (large) DOM canvas backing store. */
 const livePages = new Set();
 
-/** In-flight pdf.js RenderTasks keyed by page number — cancelled on release. */
+/**
+ * In-flight pdf.js RenderTasks keyed by `${pdfSrc}::${pageNum}` so UG/PG
+ * page 1 never cancel each other across a fast book switch.
+ */
 const activeRenderTasks = new Map();
 
 let releaseLogAt = 0;
@@ -11,6 +14,10 @@ const RELEASE_LOG_INTERVAL_MS = 4000;
 
 /** Delay before retrying page.cleanup() when the first call returns false. */
 const CLEANUP_RETRY_MS = 50;
+
+export function renderTaskKey(pdfSrc, pageNum) {
+  return `${pdfSrc || ''}::${pageNum}`;
+}
 
 export function getLiveCanvasCount() {
   return livePages.size;
@@ -24,28 +31,47 @@ export function markCanvasReleased(pageNum) {
   if (pageNum != null) livePages.delete(pageNum);
 }
 
-export function trackRenderTask(pageNum, task) {
+export function trackRenderTask(pdfSrc, pageNum, task) {
   if (pageNum == null || !task) return;
-  activeRenderTasks.set(pageNum, task);
+  activeRenderTasks.set(renderTaskKey(pdfSrc, pageNum), task);
 }
 
-export function untrackRenderTask(pageNum, task) {
+export function untrackRenderTask(pdfSrc, pageNum, task) {
   if (pageNum == null) return;
-  if (activeRenderTasks.get(pageNum) === task) {
-    activeRenderTasks.delete(pageNum);
+  const key = renderTaskKey(pdfSrc, pageNum);
+  if (activeRenderTasks.get(key) === task) {
+    activeRenderTasks.delete(key);
   }
 }
 
 /** Cancel any in-flight pdf.js render for this page before freeing the canvas. */
-export function cancelPageRender(pageNum) {
-  const task = activeRenderTasks.get(pageNum);
+export function cancelPageRender(pdfSrc, pageNum) {
+  const key = renderTaskKey(pdfSrc, pageNum);
+  const task = activeRenderTasks.get(key);
   if (!task) return;
   try {
     task.cancel();
   } catch {
     /* ignore */
   }
-  activeRenderTasks.delete(pageNum);
+  activeRenderTasks.delete(key);
+}
+
+/** Cancel every in-flight render (document switch / full cache clear). */
+export function cancelAllPageRenders() {
+  for (const task of activeRenderTasks.values()) {
+    try {
+      task.cancel();
+    } catch {
+      /* ignore */
+    }
+  }
+  activeRenderTasks.clear();
+}
+
+/** Drop live-page bookkeeping when leaving a flipbook. */
+export function resetLiveCanvasTracking() {
+  livePages.clear();
 }
 
 /**
@@ -87,13 +113,13 @@ function tryPageCleanup(pdfPage) {
  * Free DOM canvas + cancel worker render + drop pdf.js page operator/cache
  * resources (PDFPageProxy.cleanup in pdfjs-dist 6.1.200).
  */
-export function releasePageResources({ canvas, pageNum, pdfPage } = {}) {
-  cancelPageRender(pageNum);
+export function releasePageResources({ canvas, pageNum, pdfPage, pdfSrc } = {}) {
+  cancelPageRender(pdfSrc, pageNum);
   releaseCanvasElement(canvas);
 
   // DOM canvas is shrunk regardless — check cleanup() so logs can tell apart
   // "canvas released cleanly" vs "canvas shrunk but worker cleanup skipped".
-  let pageCleanupRan = tryPageCleanup(pdfPage);
+  const pageCleanupRan = tryPageCleanup(pdfPage);
 
   if (pageCleanupRan === false && pdfPage) {
     const capturedPage = pdfPage;
@@ -101,7 +127,6 @@ export function releasePageResources({ canvas, pageNum, pdfPage } = {}) {
     setTimeout(() => {
       const retried = tryPageCleanup(capturedPage);
       if (retried) return;
-      // Still skipped after retry — distinct beacon (not conflated with clean release)
       logCanvasCleanupSkipped(capturedNum, { retried: true });
     }, CLEANUP_RETRY_MS);
   }
@@ -116,8 +141,6 @@ function canvasTelemetryExtras(pageNum, extra = {}) {
     devicePixelRatio:
       typeof window !== 'undefined' ? window.devicePixelRatio || 1 : null,
     liveCanvasCount: getLiveCanvasCount(),
-    // UA is also attached by reportClientError — duplicated in message for
-    // easy JSON grepping in Vercel logs.
     userAgent:
       typeof navigator !== 'undefined' ? navigator.userAgent : '',
     ...extra,
@@ -135,10 +158,6 @@ export function logCanvasPixelCap(fields) {
   });
 }
 
-/**
- * Throttled clean-path release beacon.
- * `pageCleanupRan`: true | false | null (null = no page proxy on release).
- */
 export function logCanvasReleased(pageNum, { pageCleanupRan } = {}) {
   const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
   if (now - releaseLogAt < RELEASE_LOG_INTERVAL_MS) return;
@@ -153,10 +172,6 @@ export function logCanvasReleased(pageNum, { pageCleanupRan } = {}) {
   });
 }
 
-/**
- * Always logged (not throttled with clean releases): canvas was shrunk but
- * PDFPageProxy.cleanup() returned false even after one deferred retry.
- */
 export function logCanvasCleanupSkipped(pageNum, { retried = false } = {}) {
   reportClientError({
     title: 'Canvas cleanup skipped',

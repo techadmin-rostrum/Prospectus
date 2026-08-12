@@ -272,7 +272,7 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
   const updateUrlForPage = useCallback((newPageIndex) => {
     const displayPage = newPageIndex + 1;
     setCurrentPage(newPageIndex);
-    evictCache(displayPage, 4);
+    evictCache(displayPage, 4, pdfSrc);
 
     const params = new URLSearchParams(location.search);
     if (params.get('page') !== String(displayPage)) {
@@ -280,7 +280,7 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
       params.set('page', displayPage);
       navigate({ search: params.toString() }, { replace: true });
     }
-  }, [navigate, location.search, evictCache]);
+  }, [navigate, location.search, evictCache, pdfSrc]);
 
   const handleFlip = useCallback((e) => {
     flipLog('react:onFlip', bookRef.current?.pageFlip?.(), { page: e.data });
@@ -465,12 +465,15 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
+  // Wipe shared bitmap cache whenever the prospectus changes (and on unmount).
+  // Without this, a late UG render can repaint into PG after a quick switch.
   useEffect(() => {
+    clearCache();
     return () => {
       cancelQueuedFlips();
       clearCache();
     };
-  }, [clearCache]);
+  }, [pdfSrc, clearCache]);
 
   // Keep nav arrows vertically centered on the book stage (not the viewport)
   useEffect(() => {
@@ -535,16 +538,17 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
   const pageElements = useMemo(
     () => Array.from({ length: numPages }, (_, i) => (
       <PageCanvas
-        key={i}
+        key={`${pdfSrc}-${i}`}
         pageNum={i + 1}
         numPages={numPages}
         pdfDocument={pdfDocument}
+        pdfSrc={pdfSrc}
         width={pageW}
         height={pageH}
         extraScale={1}
       />
     )),
-    [numPages, pdfDocument, pageW, pageH]
+    [numPages, pdfDocument, pdfSrc, pageW, pageH]
   );
 
   if (error) {

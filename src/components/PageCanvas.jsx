@@ -28,6 +28,7 @@ const PageCanvas = React.forwardRef(function PageCanvas(
     pageNum,
     numPages = 0,
     pdfDocument,
+    pdfSrc = '',
     width,
     height,
     extraScale = 1,
@@ -70,12 +71,13 @@ const PageCanvas = React.forwardRef(function PageCanvas(
       canvas: canvasRef.current,
       pageNum,
       pdfPage: pageProxyRef.current,
+      pdfSrc,
     });
     pageProxyRef.current = null;
     lastReleaseAtRef.current =
       typeof performance !== 'undefined' ? performance.now() : Date.now();
     releaseGenRef.current += 1;
-  }, [shouldHold, pageNum]);
+  }, [shouldHold, pageNum, pdfSrc]);
 
   useEffect(() => {
     if (!pdfDocument || !canvasRef.current || !width || !height || !shouldRender) {
@@ -101,7 +103,14 @@ const PageCanvas = React.forwardRef(function PageCanvas(
         const page = await pdfDocument.getPage(pageNum);
         if (cancelled || genAtSchedule !== releaseGenRef.current) return;
         pageProxyRef.current = page;
-        await renderPageToCanvas(page, canvasRef.current, width, height, extraScale);
+        await renderPageToCanvas(
+          page,
+          canvasRef.current,
+          width,
+          height,
+          extraScale,
+          pdfSrc
+        );
       } catch (err) {
         if (!cancelled && err.name !== 'RenderingCancelledException') {
           console.error(`[PageCanvas] Failed to render page ${pageNum}:`, err);
@@ -123,7 +132,7 @@ const PageCanvas = React.forwardRef(function PageCanvas(
         renderTaskRef.current = null;
       }
     };
-  }, [pdfDocument, pageNum, width, height, extraScale, renderPageToCanvas, priority, shouldRender]);
+  }, [pdfDocument, pdfSrc, pageNum, width, height, extraScale, renderPageToCanvas, priority, shouldRender]);
 
   // With showCover: page 1 = cover; then even = left leaf, odd = right leaf
   const isLeftPage = pageNum > 1 && pageNum % 2 === 0;
