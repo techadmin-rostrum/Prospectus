@@ -15,6 +15,7 @@ import {
   isPhoneViewport,
   syncAppHeight,
 } from '../utils/fullscreen';
+import { destroyCachedPdf } from '../utils/pdfCache';
 
 import { instrumentPageFlip, flipLog } from '../utils/flipDebug';
 
@@ -465,15 +466,16 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  // Clear shared bitmaps only when leaving the flipbook — NOT on mount.
-  // Mount-time clear raced with child paint effects and left white pages after
-  // UG→PG→UG switches. Cache keys already include pdfSrc so books don't mix.
+  // Tear down this prospectus's PDFDocumentProxy on leave. Reusing it on iOS
+  // after canvas release/cancel left UG blank on every 2nd+ open while PG
+  // (opened fresh more often) still looked fine.
   useEffect(() => {
     return () => {
       cancelQueuedFlips();
       clearCache();
+      destroyCachedPdf(pdfSrc);
     };
-  }, [clearCache]);
+  }, [pdfSrc, clearCache]);
 
   // Keep nav arrows vertically centered on the book stage (not the viewport)
   useEffect(() => {

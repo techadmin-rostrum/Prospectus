@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
-import { getCachedPdf, setCachedPdf } from '../utils/pdfCache';
+import { getCachedPdf, setCachedPdf, destroyCachedPdf } from '../utils/pdfCache';
 
 // Configure PDF.js worker — load from our structured static copy
 pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdfjs-dist/build/pdf.worker.min.mjs';
@@ -19,18 +19,25 @@ export const PDF_LOAD_OPTIONS = {
   disableStream: false,
   disableRange: false,
   disableAutoFetch: true,
-  // Slightly larger chunks = fewer round-trips on high-latency links
   rangeChunkSize: 131072,
 };
 
-/** Known cover aspect for these prospectuses (A4 landscape) */
 const DEFAULT_ASPECT = 842 / 595;
+
+/** Reject cached docs that can no longer serve page 1 (stale after iOS teardown). */
+async function cachedDocIsUsable(doc) {
+  if (!doc || typeof doc.getPage !== 'function') return false;
+  try {
+    const page = await doc.getPage(1);
+    const viewport = page.getViewport({ scale: 0.05 });
+    return viewport.width > 0 && viewport.height > 0;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Hook to load and cache a PDF document via pdfjs-dist.
- * Returns the document proxy, page count, loading state, and download progress.
- *
- * @param {string} pdfSrc - URL path to the PDF file (e.g., '/pdfs/UG26.v2.pdf')
  */
 export function usePdfDocument(pdfSrc) {
   const [pdfDocument, setPdfDocument] = useState(null);
@@ -58,53 +65,66 @@ export function usePdfDocument(pdfSrc) {
       setError(null);
     };
 
-    const loadPdf = async () => {
-      // Instant open if landing (or a previous visit) already warmed this PDF
-      const cached = getCachedPdf(pdfSrc);
-      if (cached) {
-        applyDoc(cached);
-        return;
-      }
-
+    const loadFromNetwork = async () => {
       setLoading(true);
       setProgress(8);
       setError(null);
       setPdfDocument(null);
       setNumPages(0);
 
-      try {
-        loadingTask = pdfjsLib.getDocument({
-          url: pdfSrc,
-          ...PDF_LOAD_OPTIONS,
-        });
+      loadingTask = pdfjsLib.getDocument({
+        url: pdfSrc,
+        ...PDF_LOAD_OPTIONS,
+      });
 
-        loadingTask.onProgress = ({ loaded, total }) => {
-          if (cancelled) return;
-          if (total > 0) {
-            const pct = Math.min(92, Math.round((loaded / total) * 100));
-            setProgress((prev) => Math.max(prev, pct));
-          } else if (loaded > 0) {
-            setProgress((prev) => (prev < 85 ? Math.max(prev, 20) : prev));
-          }
-        };
+      loadingTask.onProgress = ({ loaded, total }) => {
+        if (cancelled) return;
+        if (total > 0) {
+          const pct = Math.min(92, Math.round((loaded / total) * 100));
+          setProgress((prev) => Math.max(prev, pct));
+        } else if (loaded > 0) {
+          setProgress((prev) => (prev < 85 ? Math.max(prev, 20) : prev));
+        }
+      };
 
-        const doc = await loadingTask.promise;
-        if (cancelled) {
+      const doc = await loadingTask.promise;
+      if (cancelled) {
+        try {
           doc.destroy?.();
-          return;
+        } catch {
+          /* ignore */
+        }
+        return;
+      }
+
+      setCachedPdf(pdfSrc, doc);
+      applyDoc(doc);
+
+      doc.getPage(1).then((firstPage) => {
+        if (cancelled) return;
+        const viewport = firstPage.getViewport({ scale: 1 });
+        if (viewport.width > 0 && viewport.height > 0) {
+          setAspectRatio(viewport.width / viewport.height);
+        }
+      }).catch(() => {});
+    };
+
+    const loadPdf = async () => {
+      try {
+        // Warm handoff from landing — only if the doc still answers getPage(1).
+        const cached = getCachedPdf(pdfSrc);
+        if (cached) {
+          const ok = await cachedDocIsUsable(cached);
+          if (cancelled) return;
+          if (ok) {
+            applyDoc(cached);
+            return;
+          }
+          // Stale after a previous Flipbook session on iOS — drop and reload.
+          destroyCachedPdf(pdfSrc);
         }
 
-        setCachedPdf(pdfSrc, doc);
-        applyDoc(doc);
-
-        // Refine aspect off the critical path
-        doc.getPage(1).then((firstPage) => {
-          if (cancelled) return;
-          const viewport = firstPage.getViewport({ scale: 1 });
-          if (viewport.width > 0 && viewport.height > 0) {
-            setAspectRatio(viewport.width / viewport.height);
-          }
-        }).catch(() => {});
+        await loadFromNetwork();
       } catch (err) {
         if (!cancelled) {
           console.error('[usePdfDocument] Failed to load PDF:', err);
