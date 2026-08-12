@@ -14,7 +14,7 @@ import {
  * Hook for rendering PDF pages to canvas with high-DPI support and caching.
  *
  * Cache keys ALWAYS include pdfSrc so UG/PG never share bitmaps.
- * A generation counter invalidates in-flight renders after clearCache()
+ * A generation counter invalidates in-flight writes after clearCache()
  * (stops a late UG paint from repopulating the cache after you open PG).
  */
 
@@ -33,7 +33,6 @@ function makeCacheKey(pdfSrc, pageNum, renderScale) {
 }
 
 function pageNumFromCacheKey(key) {
-  // `${pdfSrc}::${pageNum}::${scale}` — pageNum is the second-to-last segment
   const parts = String(key).split('::');
   return parseInt(parts[parts.length - 2], 10);
 }
@@ -41,7 +40,6 @@ function pageNumFromCacheKey(key) {
 function cacheEntryUsable(cached) {
   if (!cached) return false;
   if (cached.bitmap) {
-    // Closed ImageBitmaps throw / no-op on draw — treat as miss.
     try {
       if (cached.bitmap.width === 0 && cached.bitmap.height === 0) return false;
     } catch {
@@ -52,9 +50,6 @@ function cacheEntryUsable(cached) {
   return !!(cached.canvas && cached.canvas.width > 1 && cached.canvas.height > 1);
 }
 
-/**
- * Fit `desiredScale` so width×height of the PDF viewport stays under MAX_CANVAS_PIXELS.
- */
 export function clampRenderScale(page, desiredScale) {
   let scale = desiredScale;
   let viewport = page.getViewport({ scale });
@@ -69,18 +64,37 @@ export function clampRenderScale(page, desiredScale) {
   return { scale, viewport, rawPixels, capped: true };
 }
 
+/** WebKit can silently refuse large allocations — verify size stuck. */
+function allocCanvasSize(canvas, width, height) {
+  const w = Math.max(1, Math.floor(width));
+  const h = Math.max(1, Math.floor(height));
+  canvas.width = w;
+  canvas.height = h;
+  return canvas.width === w && canvas.height === h;
+}
+
 function paintCachedToCanvas(cached, canvas, viewport, containerWidth, containerHeight) {
-  canvas.width = viewport.width;
-  canvas.height = viewport.height;
+  if (!allocCanvasSize(canvas, viewport.width, viewport.height)) {
+    // Retry at half resolution once (iOS memory pressure).
+    const ok = allocCanvasSize(canvas, viewport.width * 0.5, viewport.height * 0.5);
+    if (!ok) return false;
+  }
   canvas.style.width = `${containerWidth}px`;
   canvas.style.height = `${containerHeight}px`;
   const ctx = canvas.getContext('2d');
-  if (!ctx) return;
-  if (cached.bitmap) {
-    ctx.drawImage(cached.bitmap, 0, 0);
-  } else if (cached.canvas) {
-    ctx.drawImage(cached.canvas, 0, 0);
+  if (!ctx) return false;
+  try {
+    if (cached.bitmap) {
+      ctx.drawImage(cached.bitmap, 0, 0, canvas.width, canvas.height);
+    } else if (cached.canvas) {
+      ctx.drawImage(cached.canvas, 0, 0, canvas.width, canvas.height);
+    } else {
+      return false;
+    }
+  } catch {
+    return false;
   }
+  return canvas.width > 1 && canvas.height > 1;
 }
 
 export function usePageRenderer() {
@@ -94,10 +108,9 @@ export function usePageRenderer() {
     extraScale = 1,
     pdfSrc = ''
   ) => {
-    if (!page || !canvas) return;
+    if (!page || !canvas) return false;
 
     const pageNum = page.pageNumber;
-    const generationAtStart = cacheGeneration;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
 
     const unscaledViewport = page.getViewport({ scale: 1 });
@@ -130,132 +143,162 @@ export function usePageRenderer() {
 
     const cacheKey = makeCacheKey(pdfSrc, pageNum, renderScale);
 
-    // Cache hit — paint this canvas (don't no-op just because another render runs)
-    const cached = cacheRef.current.get(cacheKey);
-    if (cacheEntryUsable(cached)) {
-      paintCachedToCanvas(cached, canvas, viewport, containerWidth, containerHeight);
-      markCanvasLive(pageNum);
-      return;
-    }
-    if (cached) {
-      // Stale/closed entry — drop and re-render
-      try {
-        cached.bitmap?.close?.();
-      } catch {
-        /* ignore */
-      }
-      if (cached.canvas) releaseCanvasElement(cached.canvas);
-      cacheRef.current.delete(cacheKey);
-    }
+    // Up to 2 attempts: wait-for-inflight may leave no usable cache (cancelled
+    // during UG↔PG switch) — fall through and render ourselves instead of
+    // returning with a blank canvas.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const generationAtStart = cacheGeneration;
 
-    // Another caller already rendering this key: wait, then paint FROM CACHE
-    // onto *this* canvas. The old early `return` left the second canvas blank.
-    const existing = inflightRenders.get(cacheKey);
-    if (existing) {
-      try {
-        await existing;
-      } catch {
-        /* render failure handled by owner */
-      }
-      if (generationAtStart !== cacheGeneration) return;
-      const ready = cacheRef.current.get(cacheKey);
-      if (cacheEntryUsable(ready) && canvas.isConnected !== false) {
-        paintCachedToCanvas(ready, canvas, viewport, containerWidth, containerHeight);
-        markCanvasLive(pageNum);
-      }
-      return;
-    }
-
-    let resolveInflight;
-    let rejectInflight;
-    const inflightPromise = new Promise((resolve, reject) => {
-      resolveInflight = resolve;
-      rejectInflight = reject;
-    });
-    // Prevent unhandled rejection if nobody awaits failure
-    inflightPromise.catch(() => {});
-    inflightRenders.set(cacheKey, inflightPromise);
-
-    let tempCanvas = null;
-    try {
-      tempCanvas = document.createElement('canvas');
-      tempCanvas.width = viewport.width;
-      tempCanvas.height = viewport.height;
-      const ctx = tempCanvas.getContext('2d', { alpha: false });
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
-
-      const renderTask = page.render({
-        canvasContext: ctx,
-        viewport,
-        background: 'rgb(255,255,255)',
-      });
-      trackRenderTask(pdfSrc, pageNum, renderTask);
-      try {
-        await renderTask.promise;
-      } finally {
-        untrackRenderTask(pdfSrc, pageNum, renderTask);
-      }
-
-      // Document switched / cache cleared while we were rendering — discard.
-      if (generationAtStart !== cacheGeneration) {
-        resolveInflight();
-        return;
-      }
-
-      let bitmap = null;
-      try {
-        bitmap = await createImageBitmap(tempCanvas);
-      } catch {
-        /* ImageBitmap unavailable */
-      }
-
-      if (generationAtStart !== cacheGeneration) {
+      const cached = cacheRef.current.get(cacheKey);
+      if (cacheEntryUsable(cached)) {
+        if (paintCachedToCanvas(cached, canvas, viewport, containerWidth, containerHeight)) {
+          markCanvasLive(pageNum);
+          return true;
+        }
+        // Paint failed (closed bitmap / alloc) — drop entry and continue.
         try {
-          bitmap?.close?.();
+          cached.bitmap?.close?.();
         } catch {
           /* ignore */
         }
-        resolveInflight();
-        return;
+        if (cached.canvas) releaseCanvasElement(cached.canvas);
+        cacheRef.current.delete(cacheKey);
+      } else if (cached) {
+        try {
+          cached.bitmap?.close?.();
+        } catch {
+          /* ignore */
+        }
+        if (cached.canvas) releaseCanvasElement(cached.canvas);
+        cacheRef.current.delete(cacheKey);
       }
 
-      let canvasCopy = null;
-      if (!bitmap) {
-        canvasCopy = document.createElement('canvas');
-        canvasCopy.width = tempCanvas.width;
-        canvasCopy.height = tempCanvas.height;
-        canvasCopy.getContext('2d', { alpha: false }).drawImage(tempCanvas, 0, 0);
+      const existing = inflightRenders.get(cacheKey);
+      if (existing) {
+        try {
+          await existing;
+        } catch {
+          /* owner logged failure */
+        }
+        if (generationAtStart !== cacheGeneration) return false;
+        const ready = cacheRef.current.get(cacheKey);
+        if (cacheEntryUsable(ready)) {
+          if (paintCachedToCanvas(ready, canvas, viewport, containerWidth, containerHeight)) {
+            markCanvasLive(pageNum);
+            return true;
+          }
+        }
+        // No usable cache after wait — loop and become the renderer.
+        continue;
       }
 
-      cacheRef.current.set(cacheKey, {
-        bitmap,
-        canvas: canvasCopy,
-        scale: renderScale,
-        pdfSrc,
+      let resolveInflight;
+      let rejectInflight;
+      const inflightPromise = new Promise((resolve, reject) => {
+        resolveInflight = resolve;
+        rejectInflight = reject;
       });
+      inflightPromise.catch(() => {});
+      inflightRenders.set(cacheKey, inflightPromise);
 
-      // Only paint if this canvas is still in the document
-      if (canvas.isConnected !== false) {
-        paintCachedToCanvas(
-          { bitmap, canvas: canvasCopy },
-          canvas,
-          viewport,
-          containerWidth,
-          containerHeight
-        );
-        markCanvasLive(pageNum);
+      let tempCanvas = null;
+      try {
+        tempCanvas = document.createElement('canvas');
+        if (!allocCanvasSize(tempCanvas, viewport.width, viewport.height)) {
+          // Half-res fallback under memory pressure
+          if (!allocCanvasSize(tempCanvas, viewport.width * 0.5, viewport.height * 0.5)) {
+            resolveInflight();
+            return false;
+          }
+        }
+        const ctx = tempCanvas.getContext('2d', { alpha: false });
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
+
+        // Match pdf.js viewport to the canvas we actually allocated
+        const scaleForAlloc =
+          (tempCanvas.width / unscaledViewport.width);
+        const paintViewport =
+          Math.abs(scaleForAlloc - renderScale) > 0.01
+            ? page.getViewport({ scale: scaleForAlloc })
+            : viewport;
+
+        const renderTask = page.render({
+          canvasContext: ctx,
+          viewport: paintViewport,
+          background: 'rgb(255,255,255)',
+        });
+        trackRenderTask(pdfSrc, pageNum, renderTask);
+        try {
+          await renderTask.promise;
+        } finally {
+          untrackRenderTask(pdfSrc, pageNum, renderTask);
+        }
+
+        if (generationAtStart !== cacheGeneration) {
+          resolveInflight();
+          return false;
+        }
+
+        let bitmap = null;
+        try {
+          bitmap = await createImageBitmap(tempCanvas);
+        } catch {
+          /* ImageBitmap unavailable */
+        }
+
+        if (generationAtStart !== cacheGeneration) {
+          try {
+            bitmap?.close?.();
+          } catch {
+            /* ignore */
+          }
+          resolveInflight();
+          return false;
+        }
+
+        let canvasCopy = null;
+        if (!bitmap) {
+          canvasCopy = document.createElement('canvas');
+          allocCanvasSize(canvasCopy, tempCanvas.width, tempCanvas.height);
+          canvasCopy.getContext('2d', { alpha: false }).drawImage(tempCanvas, 0, 0);
+        }
+
+        const entry = {
+          bitmap,
+          canvas: canvasCopy,
+          scale: renderScale,
+          pdfSrc,
+        };
+        cacheRef.current.set(cacheKey, entry);
+
+        let painted = false;
+        if (canvas.isConnected !== false) {
+          painted = paintCachedToCanvas(
+            entry,
+            canvas,
+            // Use allocated temp size as the source viewport for draw sizing
+            { width: tempCanvas.width, height: tempCanvas.height },
+            containerWidth,
+            containerHeight
+          );
+          if (painted) markCanvasLive(pageNum);
+        }
+        resolveInflight();
+        return painted;
+      } catch (err) {
+        rejectInflight(err);
+        if (err?.name !== 'RenderingCancelledException') {
+          console.error(`[usePageRenderer] Error rendering page ${pageNum}:`, err);
+        }
+        return false;
+      } finally {
+        inflightRenders.delete(cacheKey);
+        if (tempCanvas) releaseCanvasElement(tempCanvas);
       }
-      resolveInflight();
-    } catch (err) {
-      rejectInflight(err);
-      if (err.name !== 'RenderingCancelledException') {
-        console.error(`[usePageRenderer] Error rendering page ${pageNum}:`, err);
-      }
-    } finally {
-      inflightRenders.delete(cacheKey);
-      if (tempCanvas) releaseCanvasElement(tempCanvas);
     }
+
+    return false;
   }, []);
 
   const evictCache = useCallback((currentPage, windowSize = 4, pdfSrc = '') => {
@@ -279,10 +322,6 @@ export function usePageRenderer() {
     }
   }, []);
 
-  /**
-   * Clear the entire bitmap cache and invalidate in-flight renders.
-   * Call on Flipbook unmount AND whenever pdfSrc changes.
-   */
   const clearCache = useCallback(() => {
     cacheGeneration += 1;
     cancelAllPageRenders();

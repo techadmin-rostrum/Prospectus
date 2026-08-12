@@ -465,15 +465,15 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  // Wipe shared bitmap cache whenever the prospectus changes (and on unmount).
-  // Without this, a late UG render can repaint into PG after a quick switch.
+  // Clear shared bitmaps only when leaving the flipbook — NOT on mount.
+  // Mount-time clear raced with child paint effects and left white pages after
+  // UG→PG→UG switches. Cache keys already include pdfSrc so books don't mix.
   useEffect(() => {
-    clearCache();
     return () => {
       cancelQueuedFlips();
       clearCache();
     };
-  }, [pdfSrc, clearCache]);
+  }, [clearCache]);
 
   // Keep nav arrows vertically centered on the book stage (not the viewport)
   useEffect(() => {

@@ -40,10 +40,8 @@ const PageCanvas = React.forwardRef(function PageCanvas(
   const renderTaskRef = useRef(null);
   const lastReleaseAtRef = useRef(0);
   const releaseGenRef = useRef(0);
-  const pageProxyRef = useRef(null);
   const isHardCover = pageNum === 1 || (numPages > 0 && pageNum === numPages);
 
-  // Read the window here rather than take it as a prop — see PageWindowContext.
   const currentPage = useContext(PageWindowContext);
   const i = pageNum - 1;
   const priority =
@@ -51,14 +49,11 @@ const PageCanvas = React.forwardRef(function PageCanvas(
     (currentPage === 0 && i <= 1) ||
     (numPages > 0 && currentPage >= numPages - 2 && i >= numPages - 2);
 
-  // Live paint window (±3). All PageCanvas nodes stay mounted (react-pageflip
-  // requires a stable children list).
   const shouldRender = inWindow(currentPage, i, numPages, RENDER_RADIUS);
-  // Wider hold window (±4): only release once outside this band.
   const shouldHold = inWindow(currentPage, i, numPages, HOLD_RADIUS);
 
-  // Release only after leaving the hold band — never in the same tick as a
-  // shouldRender re-entry from the inner edge of the paint window.
+  // Shrink off-window canvases (iOS memory). No pdfPage.cleanup() — that was
+  // blanking pages after UG↔PG reopen of the cached document.
   useEffect(() => {
     if (shouldHold) return;
 
@@ -70,10 +65,8 @@ const PageCanvas = React.forwardRef(function PageCanvas(
     releasePageResources({
       canvas: canvasRef.current,
       pageNum,
-      pdfPage: pageProxyRef.current,
       pdfSrc,
     });
-    pageProxyRef.current = null;
     lastReleaseAtRef.current =
       typeof performance !== 'undefined' ? performance.now() : Date.now();
     releaseGenRef.current += 1;
@@ -88,7 +81,6 @@ const PageCanvas = React.forwardRef(function PageCanvas(
     const genAtSchedule = releaseGenRef.current;
 
     const render = async () => {
-      // If a release just ran, wait so WebKit can reclaim before we realloc.
       const now =
         typeof performance !== 'undefined' ? performance.now() : Date.now();
       const elapsed = now - lastReleaseAtRef.current;
@@ -102,8 +94,8 @@ const PageCanvas = React.forwardRef(function PageCanvas(
       try {
         const page = await pdfDocument.getPage(pageNum);
         if (cancelled || genAtSchedule !== releaseGenRef.current) return;
-        pageProxyRef.current = page;
-        await renderPageToCanvas(
+
+        let painted = await renderPageToCanvas(
           page,
           canvasRef.current,
           width,
@@ -111,6 +103,30 @@ const PageCanvas = React.forwardRef(function PageCanvas(
           extraScale,
           pdfSrc
         );
+
+        // One retry if we still have a released/empty canvas (switch race).
+        if (
+          !painted &&
+          !cancelled &&
+          genAtSchedule === releaseGenRef.current &&
+          canvasRef.current &&
+          canvasRef.current.width <= 1
+        ) {
+          await new Promise((r) => setTimeout(r, 50));
+          if (cancelled || genAtSchedule !== releaseGenRef.current) return;
+          painted = await renderPageToCanvas(
+            page,
+            canvasRef.current,
+            width,
+            height,
+            extraScale,
+            pdfSrc
+          );
+        }
+
+        if (!painted && !cancelled) {
+          console.warn(`[PageCanvas] Page ${pageNum} stayed blank after render`);
+        }
       } catch (err) {
         if (!cancelled && err.name !== 'RenderingCancelledException') {
           console.error(`[PageCanvas] Failed to render page ${pageNum}:`, err);
@@ -121,8 +137,6 @@ const PageCanvas = React.forwardRef(function PageCanvas(
     if (renderTaskRef.current) {
       clearTimeout(renderTaskRef.current);
     }
-    // Priority pages still go first, but never sooner than the re-enter delay
-    // path inside `render` after a recent release.
     renderTaskRef.current = setTimeout(render, priority ? 0 : 16);
 
     return () => {
@@ -134,7 +148,6 @@ const PageCanvas = React.forwardRef(function PageCanvas(
     };
   }, [pdfDocument, pdfSrc, pageNum, width, height, extraScale, renderPageToCanvas, priority, shouldRender]);
 
-  // With showCover: page 1 = cover; then even = left leaf, odd = right leaf
   const isLeftPage = pageNum > 1 && pageNum % 2 === 0;
   const isRightPage = pageNum > 1 && pageNum % 2 === 1;
   const sideClass = isLeftPage

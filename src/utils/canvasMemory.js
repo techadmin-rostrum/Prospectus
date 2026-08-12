@@ -12,9 +12,6 @@ const activeRenderTasks = new Map();
 let releaseLogAt = 0;
 const RELEASE_LOG_INTERVAL_MS = 4000;
 
-/** Delay before retrying page.cleanup() when the first call returns false. */
-const CLEANUP_RETRY_MS = 50;
-
 export function renderTaskKey(pdfSrc, pageNum) {
   return `${pdfSrc || ''}::${pageNum}`;
 }
@@ -91,48 +88,19 @@ export function releaseCanvasElement(canvas) {
 }
 
 /**
- * Attempt PDFPageProxy.cleanup() (pdfjs-dist 6.1.200).
- * Returns true if cleanup ran, false if deferred/no-op, null if no proxy.
+ * Free DOM canvas backing store + cancel any in-flight render for this page.
  *
- * NOTE: This frees image/font objects for the page, but does NOT remove the
- * page proxy from the document transport's #pageCache / #pagePromises — only
- * doc.destroy() does that. Proxy metadata is tiny (KB); canvas memory is the
- * real budget. If liveCanvasCount stays flat but a very long session still
- * degrades, that residual pageCache is the next place to look.
+ * Intentionally does NOT call pdfPage.cleanup(). That API frees worker image/font
+ * objects, but with documents kept alive in pdfCache across UG↔PG switches it
+ * left pages unable to paint on reopen (white flipbook). Canvas 1×1 + bitmap
+ * cache eviction is enough for the iOS memory ceiling; page.cleanup remains a
+ * last-resort if liveCanvasCount stays flat but sessions still die after hours.
  */
-function tryPageCleanup(pdfPage) {
-  if (!pdfPage || typeof pdfPage.cleanup !== 'function') return null;
-  try {
-    return !!pdfPage.cleanup();
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Free DOM canvas + cancel worker render + drop pdf.js page operator/cache
- * resources (PDFPageProxy.cleanup in pdfjs-dist 6.1.200).
- */
-export function releasePageResources({ canvas, pageNum, pdfPage, pdfSrc } = {}) {
+export function releasePageResources({ canvas, pageNum, pdfSrc } = {}) {
   cancelPageRender(pdfSrc, pageNum);
   releaseCanvasElement(canvas);
-
-  // DOM canvas is shrunk regardless — check cleanup() so logs can tell apart
-  // "canvas released cleanly" vs "canvas shrunk but worker cleanup skipped".
-  const pageCleanupRan = tryPageCleanup(pdfPage);
-
-  if (pageCleanupRan === false && pdfPage) {
-    const capturedPage = pdfPage;
-    const capturedNum = pageNum;
-    setTimeout(() => {
-      const retried = tryPageCleanup(capturedPage);
-      if (retried) return;
-      logCanvasCleanupSkipped(capturedNum, { retried: true });
-    }, CLEANUP_RETRY_MS);
-  }
-
   markCanvasReleased(pageNum);
-  logCanvasReleased(pageNum, { pageCleanupRan });
+  logCanvasReleased(pageNum, { pageCleanupRan: null });
 }
 
 function canvasTelemetryExtras(pageNum, extra = {}) {
@@ -168,17 +136,6 @@ export function logCanvasReleased(pageNum, { pageCleanupRan } = {}) {
     message: JSON.stringify({
       kind: 'canvas_released',
       ...canvasTelemetryExtras(pageNum, { pageCleanupRan }),
-    }),
-  });
-}
-
-export function logCanvasCleanupSkipped(pageNum, { retried = false } = {}) {
-  reportClientError({
-    title: 'Canvas cleanup skipped',
-    message: JSON.stringify({
-      kind: 'canvas_cleanup_skipped',
-      retried,
-      ...canvasTelemetryExtras(pageNum, { pageCleanupRan: false }),
     }),
   });
 }
