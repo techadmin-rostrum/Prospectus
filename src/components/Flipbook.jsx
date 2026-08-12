@@ -17,6 +17,7 @@ import {
 } from '../utils/fullscreen';
 import { destroyCachedPdf } from '../utils/pdfCache';
 import { closePdfDocument } from '../utils/pdfSession';
+import { resetFlipbookRuntime } from '../utils/resetFlipbookRuntime';
 
 import { instrumentPageFlip, flipLog } from '../utils/flipDebug';
 
@@ -65,6 +66,11 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
   const currentPageRef = useRef(0);
   currentPageRef.current = currentPage;
   const stopCanvasSyncRef = useRef(null);
+  // Unique per Flipbook mount — canvas cache keys include this so a stale
+  // render from a previous UG/PG visit can never paint into this session.
+  const renderSessionIdRef = useRef(
+    `${pdfSrc}:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 8)}`
+  );
 
   // Interior turns. Cover open on mobile uses a custom door animation in flipBook.
   const PAGE_FLIP_MS = isMobile ? 2200 : 900;
@@ -274,7 +280,7 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
   const updateUrlForPage = useCallback((newPageIndex) => {
     const displayPage = newPageIndex + 1;
     setCurrentPage(newPageIndex);
-    evictCache(displayPage, 4, pdfSrc);
+    evictCache(displayPage, 4, pdfSrc, renderSessionIdRef.current);
 
     const params = new URLSearchParams(location.search);
     if (params.get('page') !== String(displayPage)) {
@@ -467,13 +473,16 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  // Clear canvas bitmaps on enter/leave only — PDF worker lifecycle lives in
-  // usePdfDocument/pdfSession (awaited destroy). Mount-time destroyAll was
-  // racing the next getDocument and made single-switch leaks worse.
+  // Clear canvas bitmaps on enter/leave. Hard navigation from landing also
+  // wipes JS state; this covers any soft route that still remounts Flipbook.
   useLayoutEffect(() => {
+    renderSessionIdRef.current =
+      `${pdfSrc}:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 8)}`;
+    resetFlipbookRuntime();
     clearCache();
     return () => {
       cancelQueuedFlips();
+      resetFlipbookRuntime();
       clearCache();
       const doc = destroyCachedPdf(pdfSrc);
       closePdfDocument(doc);
@@ -543,11 +552,12 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
   const pageElements = useMemo(
     () => Array.from({ length: numPages }, (_, i) => (
       <PageCanvas
-        key={`${pdfSrc}-${i}`}
+        key={`${renderSessionIdRef.current}-${i}`}
         pageNum={i + 1}
         numPages={numPages}
         pdfDocument={pdfDocument}
         pdfSrc={pdfSrc}
+        sessionId={renderSessionIdRef.current}
         width={pageW}
         height={pageH}
         extraScale={1}
@@ -743,7 +753,7 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
                 >
                 <PageWindowContext.Provider value={currentPage}>
                 <HTMLFlipBook
-                  key={`book-${isMobile ? 'm' : 'd'}-${Math.round(dimensions.width / 64) * 64}x${Math.round(dimensions.height / 64) * 64}`}
+                  key={`book-${pdfSrc}-${renderSessionIdRef.current}-${isMobile ? 'm' : 'd'}-${Math.round(dimensions.width / 64) * 64}x${Math.round(dimensions.height / 64) * 64}`}
                   width={pageW}
                   height={pageH}
                   size="fixed"

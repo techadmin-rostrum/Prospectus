@@ -1,5 +1,4 @@
 import { useEffect } from 'react';
-import { useNavigate } from 'react-router';
 import { motion } from 'motion/react';
 import { warmPdf } from '../utils/warmPdf';
 import { enterImmersive, isPhoneViewport, syncAppHeight } from '../utils/fullscreen';
@@ -8,8 +7,6 @@ import { unlockFlipbookAudio } from '../hooks/useSound';
 const COVER_RATIO = 842 / 595;
 
 export default function LandingPage() {
-  const navigate = useNavigate();
-
   useEffect(() => {
     syncAppHeight();
     const onResize = () => syncAppHeight();
@@ -22,12 +19,14 @@ export default function LandingPage() {
   }, []);
 
   const openProspectus = (path) => {
-    // Same user gesture: unlock iOS audio + maximize layout, then navigate.
     unlockFlipbookAudio();
     if (isPhoneViewport()) {
       enterImmersive();
     }
-    navigate(path);
+    // Full document load — not React Router. Soft SPA navigations were leaving
+    // pdf.js workers / canvas bitmaps alive, so UG↔PG randomly showed each
+    // other's pages on Android and iOS. A real navigation wipes that state.
+    window.location.assign(path);
   };
 
   return (

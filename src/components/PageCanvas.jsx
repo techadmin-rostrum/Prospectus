@@ -30,6 +30,7 @@ const PageCanvas = React.forwardRef(function PageCanvas(
     numPages = 0,
     pdfDocument,
     pdfSrc = '',
+    sessionId = '',
     width,
     height,
     extraScale = 1,
@@ -105,7 +106,8 @@ const PageCanvas = React.forwardRef(function PageCanvas(
           width,
           height,
           extraScale,
-          pdfSrc
+          pdfSrc,
+          sessionId
         );
 
         // One retry if we still have a released/empty canvas (switch race).
@@ -124,7 +126,8 @@ const PageCanvas = React.forwardRef(function PageCanvas(
             width,
             height,
             extraScale,
-            pdfSrc
+            pdfSrc,
+            sessionId
           );
         }
 
@@ -150,7 +153,7 @@ const PageCanvas = React.forwardRef(function PageCanvas(
         renderTaskRef.current = null;
       }
     };
-  }, [pdfDocument, pdfSrc, pageNum, width, height, extraScale, renderPageToCanvas, priority, shouldRender]);
+  }, [pdfDocument, pdfSrc, sessionId, pageNum, width, height, extraScale, renderPageToCanvas, priority, shouldRender]);
 
   const isLeftPage = pageNum > 1 && pageNum % 2 === 0;
   const isRightPage = pageNum > 1 && pageNum % 2 === 1;

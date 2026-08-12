@@ -1,4 +1,4 @@
-import { useRef, useCallback } from 'react';
+import { useRef, useCallback, useEffect } from 'react';
 import {
   cancelAllPageRenders,
   getLiveCanvasCount,
@@ -9,27 +9,43 @@ import {
   trackRenderTask,
   untrackRenderTask,
 } from '../utils/canvasMemory';
+import { registerPageRendererReset } from '../utils/resetFlipbookRuntime';
 
 /**
- * Hook for rendering PDF pages to canvas with high-DPI support and caching.
- *
- * Cache keys ALWAYS include pdfSrc so UG/PG never share bitmaps.
- * A generation counter invalidates in-flight writes after clearCache()
- * (stops a late UG paint from repopulating the cache after you open PG).
+ * Cache keys include pdfSrc AND a per-mount sessionId so a previous book's
+ * in-flight render can never paint into the next visit's canvases.
  */
 
-/** Safety margin under WebKit's 16,777,216 hard canvas-pixel ceiling. */
 export const MAX_CANVAS_PIXELS = 16_000_000;
 
 const globalCache = new Map();
-/** cacheKey → Promise that resolves when that render finishes (success or fail). */
 const inflightRenders = new Map();
-/** Bumped on every clearCache — in-flight work must not write after a bump. */
 let cacheGeneration = 0;
 const capHitLogged = new Set();
 
-function makeCacheKey(pdfSrc, pageNum, renderScale) {
-  return `${pdfSrc || ''}::${pageNum}::${renderScale.toFixed(2)}`;
+function wipePageRendererState() {
+  cacheGeneration += 1;
+  cancelAllPageRenders();
+  resetLiveCanvasTracking();
+  inflightRenders.clear();
+  for (const [, value] of globalCache.entries()) {
+    try {
+      value.bitmap?.close?.();
+    } catch {
+      /* ignore */
+    }
+    if (value.canvas) {
+      releaseCanvasElement(value.canvas);
+      value.canvas = null;
+    }
+  }
+  globalCache.clear();
+}
+
+registerPageRendererReset(wipePageRendererState);
+
+function makeCacheKey(sessionId, pdfSrc, pageNum, renderScale) {
+  return `${sessionId || ''}::${pdfSrc || ''}::${pageNum}::${renderScale.toFixed(2)}`;
 }
 
 function pageNumFromCacheKey(key) {
@@ -64,7 +80,6 @@ export function clampRenderScale(page, desiredScale) {
   return { scale, viewport, rawPixels, capped: true };
 }
 
-/** WebKit can silently refuse large allocations — verify size stuck. */
 function allocCanvasSize(canvas, width, height) {
   const w = Math.max(1, Math.floor(width));
   const h = Math.max(1, Math.floor(height));
@@ -75,7 +90,6 @@ function allocCanvasSize(canvas, width, height) {
 
 function paintCachedToCanvas(cached, canvas, viewport, containerWidth, containerHeight) {
   if (!allocCanvasSize(canvas, viewport.width, viewport.height)) {
-    // Retry at half resolution once (iOS memory pressure).
     const ok = allocCanvasSize(canvas, viewport.width * 0.5, viewport.height * 0.5);
     if (!ok) return false;
   }
@@ -100,13 +114,18 @@ function paintCachedToCanvas(cached, canvas, viewport, containerWidth, container
 export function usePageRenderer() {
   const cacheRef = useRef(globalCache);
 
+  useEffect(() => {
+    registerPageRendererReset(wipePageRendererState);
+  }, []);
+
   const renderPageToCanvas = useCallback(async (
     page,
     canvas,
     containerWidth,
     containerHeight,
     extraScale = 1,
-    pdfSrc = ''
+    pdfSrc = '',
+    sessionId = ''
   ) => {
     if (!page || !canvas) return false;
 
@@ -125,12 +144,13 @@ export function usePageRenderer() {
     );
 
     if (capped) {
-      const key = `${pdfSrc}:${pageNum}:${Math.round(rawPixels)}`;
+      const key = `${sessionId}:${pdfSrc}:${pageNum}:${Math.round(rawPixels)}`;
       if (!capHitLogged.has(key)) {
         capHitLogged.add(key);
         logCanvasPixelCap({
           pageNum,
           pdfSrc,
+          sessionId,
           rawPixels: Math.round(rawPixels),
           safePixels: Math.round(viewport.width * viewport.height),
           maxCanvasPixels: MAX_CANVAS_PIXELS,
@@ -141,21 +161,21 @@ export function usePageRenderer() {
       }
     }
 
-    const cacheKey = makeCacheKey(pdfSrc, pageNum, renderScale);
+    const cacheKey = makeCacheKey(sessionId, pdfSrc, pageNum, renderScale);
 
-    // Up to 2 attempts: wait-for-inflight may leave no usable cache (cancelled
-    // during UG↔PG switch) — fall through and render ourselves instead of
-    // returning with a blank canvas.
     for (let attempt = 0; attempt < 2; attempt++) {
       const generationAtStart = cacheGeneration;
 
       const cached = cacheRef.current.get(cacheKey);
-      if (cacheEntryUsable(cached) && cached.pdfSrc === pdfSrc) {
+      if (
+        cacheEntryUsable(cached) &&
+        cached.pdfSrc === pdfSrc &&
+        cached.sessionId === sessionId
+      ) {
         if (paintCachedToCanvas(cached, canvas, viewport, containerWidth, containerHeight)) {
           markCanvasLive(pageNum);
           return true;
         }
-        // Paint failed (closed bitmap / alloc) — drop entry and continue.
         try {
           cached.bitmap?.close?.();
         } catch {
@@ -178,17 +198,20 @@ export function usePageRenderer() {
         try {
           await existing;
         } catch {
-          /* owner logged failure */
+          /* ignore */
         }
         if (generationAtStart !== cacheGeneration) return false;
         const ready = cacheRef.current.get(cacheKey);
-        if (cacheEntryUsable(ready) && ready.pdfSrc === pdfSrc) {
+        if (
+          cacheEntryUsable(ready) &&
+          ready.pdfSrc === pdfSrc &&
+          ready.sessionId === sessionId
+        ) {
           if (paintCachedToCanvas(ready, canvas, viewport, containerWidth, containerHeight)) {
             markCanvasLive(pageNum);
             return true;
           }
         }
-        // No usable cache after wait — loop and become the renderer.
         continue;
       }
 
@@ -205,7 +228,6 @@ export function usePageRenderer() {
       try {
         tempCanvas = document.createElement('canvas');
         if (!allocCanvasSize(tempCanvas, viewport.width, viewport.height)) {
-          // Half-res fallback under memory pressure
           if (!allocCanvasSize(tempCanvas, viewport.width * 0.5, viewport.height * 0.5)) {
             resolveInflight();
             return false;
@@ -215,9 +237,7 @@ export function usePageRenderer() {
         ctx.fillStyle = '#ffffff';
         ctx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
 
-        // Match pdf.js viewport to the canvas we actually allocated
-        const scaleForAlloc =
-          (tempCanvas.width / unscaledViewport.width);
+        const scaleForAlloc = tempCanvas.width / unscaledViewport.width;
         const paintViewport =
           Math.abs(scaleForAlloc - renderScale) > 0.01
             ? page.getViewport({ scale: scaleForAlloc })
@@ -244,7 +264,7 @@ export function usePageRenderer() {
         try {
           bitmap = await createImageBitmap(tempCanvas);
         } catch {
-          /* ImageBitmap unavailable */
+          /* ignore */
         }
 
         if (generationAtStart !== cacheGeneration) {
@@ -269,6 +289,7 @@ export function usePageRenderer() {
           canvas: canvasCopy,
           scale: renderScale,
           pdfSrc,
+          sessionId,
         };
         cacheRef.current.set(cacheKey, entry);
 
@@ -277,7 +298,6 @@ export function usePageRenderer() {
           painted = paintCachedToCanvas(
             entry,
             canvas,
-            // Use allocated temp size as the source viewport for draw sizing
             { width: tempCanvas.width, height: tempCanvas.height },
             containerWidth,
             containerHeight
@@ -301,9 +321,10 @@ export function usePageRenderer() {
     return false;
   }, []);
 
-  const evictCache = useCallback((currentPage, windowSize = 4, pdfSrc = '') => {
+  const evictCache = useCallback((currentPage, windowSize = 4, pdfSrc = '', sessionId = '') => {
     const cache = cacheRef.current;
     for (const [key, value] of cache.entries()) {
+      if (sessionId && value.sessionId && value.sessionId !== sessionId) continue;
       if (pdfSrc && value.pdfSrc && value.pdfSrc !== pdfSrc) continue;
       const pageNum = pageNumFromCacheKey(key);
       if (!Number.isFinite(pageNum)) continue;
@@ -323,24 +344,7 @@ export function usePageRenderer() {
   }, []);
 
   const clearCache = useCallback(() => {
-    cacheGeneration += 1;
-    cancelAllPageRenders();
-    resetLiveCanvasTracking();
-    inflightRenders.clear();
-
-    const cache = cacheRef.current;
-    for (const [, value] of cache.entries()) {
-      try {
-        value.bitmap?.close?.();
-      } catch {
-        /* ignore */
-      }
-      if (value.canvas) {
-        releaseCanvasElement(value.canvas);
-        value.canvas = null;
-      }
-    }
-    cache.clear();
+    wipePageRendererState();
   }, []);
 
   return { renderPageToCanvas, evictCache, clearCache };
