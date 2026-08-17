@@ -1,8 +1,13 @@
 import React, { useRef, useEffect, useContext, memo } from 'react';
 import { usePageRenderer } from '../hooks/usePageRenderer';
 import { PageWindowContext } from './PageWindowContext';
-import { releasePageResources } from '../utils/canvasMemory';
+import {
+  logPageBlank,
+  logPageRenderError,
+  releasePageResources,
+} from '../utils/canvasMemory';
 import { assertDocMatchesSrc } from '../utils/pdfSession';
+import { describeError } from '../utils/clientErrorLog';
 
 /** Paint live pixels inside this radius of the current page. */
 const RENDER_RADIUS = 3;
@@ -110,13 +115,13 @@ const PageCanvas = React.forwardRef(function PageCanvas(
           sessionId
         );
 
-        // One retry if we still have a released/empty canvas (switch race).
+        // One retry for a released/empty canvas (switch race) or a failed first
+        // paint — by now a memory failure has lowered the resolution budget.
         if (
           !painted &&
           !cancelled &&
           genAtSchedule === releaseGenRef.current &&
-          canvasRef.current &&
-          canvasRef.current.width <= 1
+          canvasRef.current
         ) {
           await new Promise((r) => setTimeout(r, 50));
           if (cancelled || genAtSchedule !== releaseGenRef.current) return;
@@ -133,10 +138,21 @@ const PageCanvas = React.forwardRef(function PageCanvas(
 
         if (!painted && !cancelled) {
           console.warn(`[PageCanvas] Page ${pageNum} stayed blank after render`);
+          logPageBlank({
+            pageNum,
+            pdfSrc,
+            sessionId,
+            canvasWidth: canvasRef.current?.width ?? null,
+            canvasHeight: canvasRef.current?.height ?? null,
+          });
         }
       } catch (err) {
-        if (!cancelled && err.name !== 'RenderingCancelledException') {
-          console.error(`[PageCanvas] Failed to render page ${pageNum}:`, err);
+        if (!cancelled && err?.name !== 'RenderingCancelledException') {
+          console.error(
+            `[PageCanvas] Failed to render page ${pageNum}: ${describeError(err)}`,
+            err?.stack || ''
+          );
+          logPageRenderError(err, { pageNum, pdfSrc, sessionId, stage: 'page_canvas' });
         }
       }
     };

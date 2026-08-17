@@ -1,8 +1,12 @@
 import { useRef, useCallback, useEffect } from 'react';
+import { describeError } from '../utils/clientErrorLog';
 import {
   cancelAllPageRenders,
   getLiveCanvasCount,
+  logCanvasContextUnavailable,
   logCanvasPixelCap,
+  logPageRenderError,
+  logRenderDegraded,
   markCanvasLive,
   releaseCanvasElement,
   resetLiveCanvasTracking,
@@ -17,11 +21,26 @@ import { registerPageRendererReset } from '../utils/resetFlipbookRuntime';
  */
 
 export const MAX_CANVAS_PIXELS = 16_000_000;
+/** Budget once a device has proven it cannot serve full-resolution buffers. */
+const DEGRADED_CANVAS_PIXELS = 4_000_000;
 
 const globalCache = new Map();
 const inflightRenders = new Map();
 let cacheGeneration = 0;
 const capHitLogged = new Set();
+
+/**
+ * Set after any render failure. Some iPhones run out of canvas memory at full
+ * DPR; dropping resolution for the rest of the session beats blank pages. Stays
+ * on across book switches because it reflects the device, not the document.
+ */
+let degradedRender = false;
+
+function enterDegradedRender(reason, fields) {
+  if (degradedRender) return;
+  degradedRender = true;
+  logRenderDegraded({ reason, ...fields });
+}
 
 function wipePageRendererState() {
   cacheGeneration += 1;
@@ -67,17 +86,38 @@ function cacheEntryUsable(cached) {
 }
 
 export function clampRenderScale(page, desiredScale) {
+  const budget = degradedRender ? DEGRADED_CANVAS_PIXELS : MAX_CANVAS_PIXELS;
   let scale = desiredScale;
   let viewport = page.getViewport({ scale });
   const rawPixels = viewport.width * viewport.height;
 
-  if (rawPixels <= MAX_CANVAS_PIXELS || rawPixels <= 0) {
+  if (rawPixels <= budget || rawPixels <= 0) {
     return { scale, viewport, rawPixels, capped: false };
   }
 
-  scale = desiredScale * Math.sqrt(MAX_CANVAS_PIXELS / rawPixels);
+  scale = desiredScale * Math.sqrt(budget / rawPixels);
   viewport = page.getViewport({ scale });
   return { scale, viewport, rawPixels, capped: true };
+}
+
+/**
+ * iOS Safari returns null (rather than throwing) once the process-wide canvas
+ * memory budget is exhausted, and some builds reject the options bag. Callers
+ * must handle null instead of dereferencing it.
+ */
+function get2dContext(canvas, options) {
+  if (!canvas) return null;
+  try {
+    const ctx = canvas.getContext('2d', options);
+    if (ctx) return ctx;
+  } catch {
+    /* fall through to the plain request */
+  }
+  try {
+    return canvas.getContext('2d') || null;
+  } catch {
+    return null;
+  }
 }
 
 function allocCanvasSize(canvas, width, height) {
@@ -95,7 +135,7 @@ function paintCachedToCanvas(cached, canvas, viewport, containerWidth, container
   }
   canvas.style.width = `${containerWidth}px`;
   canvas.style.height = `${containerHeight}px`;
-  const ctx = canvas.getContext('2d');
+  const ctx = get2dContext(canvas);
   if (!ctx) return false;
   try {
     if (cached.bitmap) {
@@ -130,7 +170,7 @@ export function usePageRenderer() {
     if (!page || !canvas) return false;
 
     const pageNum = page.pageNumber;
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const dpr = degradedRender ? 1 : Math.min(window.devicePixelRatio || 1, 2);
 
     const unscaledViewport = page.getViewport({ scale: 1 });
     const scaleX = containerWidth / unscaledViewport.width;
@@ -233,7 +273,26 @@ export function usePageRenderer() {
             return false;
           }
         }
-        const ctx = tempCanvas.getContext('2d', { alpha: false });
+        let ctx = get2dContext(tempCanvas, { alpha: false });
+        if (
+          !ctx &&
+          allocCanvasSize(tempCanvas, viewport.width * 0.5, viewport.height * 0.5)
+        ) {
+          ctx = get2dContext(tempCanvas, { alpha: false });
+        }
+        if (!ctx) {
+          logCanvasContextUnavailable({
+            pageNum,
+            pdfSrc,
+            sessionId,
+            stage: 'render_target',
+            requestedWidth: Math.round(viewport.width),
+            requestedHeight: Math.round(viewport.height),
+          });
+          enterDegradedRender('context_unavailable', { pageNum, pdfSrc });
+          resolveInflight();
+          return false;
+        }
         ctx.fillStyle = '#ffffff';
         ctx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
 
@@ -280,8 +339,41 @@ export function usePageRenderer() {
         let canvasCopy = null;
         if (!bitmap) {
           canvasCopy = document.createElement('canvas');
-          allocCanvasSize(canvasCopy, tempCanvas.width, tempCanvas.height);
-          canvasCopy.getContext('2d', { alpha: false }).drawImage(tempCanvas, 0, 0);
+          const copyCtx =
+            allocCanvasSize(canvasCopy, tempCanvas.width, tempCanvas.height)
+              ? get2dContext(canvasCopy, { alpha: false })
+              : null;
+          if (copyCtx) {
+            copyCtx.drawImage(tempCanvas, 0, 0);
+          } else {
+            releaseCanvasElement(canvasCopy);
+            canvasCopy = null;
+            logCanvasContextUnavailable({
+              pageNum,
+              pdfSrc,
+              sessionId,
+              stage: 'bitmap_fallback_copy',
+              requestedWidth: tempCanvas.width,
+              requestedHeight: tempCanvas.height,
+            });
+          }
+        }
+
+        // No bitmap and no copy: paint straight from the scratch canvas so the
+        // page still shows, and skip caching an unusable entry.
+        if (!bitmap && !canvasCopy) {
+          const paintedDirect =
+            canvas.isConnected !== false &&
+            paintCachedToCanvas(
+              { canvas: tempCanvas },
+              canvas,
+              { width: tempCanvas.width, height: tempCanvas.height },
+              containerWidth,
+              containerHeight
+            );
+          if (paintedDirect) markCanvasLive(pageNum);
+          resolveInflight();
+          return paintedDirect;
         }
 
         const entry = {
@@ -309,7 +401,20 @@ export function usePageRenderer() {
       } catch (err) {
         rejectInflight(err);
         if (err?.name !== 'RenderingCancelledException') {
-          console.error(`[usePageRenderer] Error rendering page ${pageNum}:`, err);
+          console.error(
+            `[usePageRenderer] Error rendering page ${pageNum}: ${describeError(err)}`,
+            err?.stack || ''
+          );
+          logPageRenderError(err, {
+            pageNum,
+            pdfSrc,
+            sessionId,
+            renderScale: Number(renderScale.toFixed(4)),
+            canvasWidth: tempCanvas?.width ?? null,
+            canvasHeight: tempCanvas?.height ?? null,
+            degraded: degradedRender,
+          });
+          enterDegradedRender('render_error', { pageNum, pdfSrc });
         }
         return false;
       } finally {

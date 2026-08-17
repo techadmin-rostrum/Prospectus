@@ -9,6 +9,22 @@ function fingerprint(title, message) {
   return `${title}|${String(message).slice(0, 200)}`;
 }
 
+/**
+ * Safari's console prints thrown DOM errors as a bare `TypeError {}`, so build a
+ * readable string before logging or beaconing.
+ */
+export function describeError(err) {
+  if (err == null) return 'unknown';
+  if (typeof err === 'string') return err;
+  const name = err.name || err.constructor?.name || 'Error';
+  const message = err.message || err.reason || err.statusText || '';
+  const extra = [];
+  if (err.code != null) extra.push(`code=${err.code}`);
+  if (err.status != null) extra.push(`status=${err.status}`);
+  const suffix = extra.length ? ` (${extra.join(' ')})` : '';
+  return message ? `${name}: ${message}${suffix}` : `${name}${suffix}`;
+}
+
 export function reportClientError({ title, message, stack, url } = {}) {
   const key = fingerprint(title || 'error', message || '');
   if (recent.has(key)) return;

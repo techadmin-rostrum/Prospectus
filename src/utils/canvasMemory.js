@@ -1,4 +1,4 @@
-import { reportClientError } from './clientErrorLog';
+import { describeError, reportClientError } from './clientErrorLog';
 
 /** Pages with a non-released (large) DOM canvas backing store. */
 const livePages = new Set();
@@ -111,7 +111,22 @@ function canvasTelemetryExtras(pageNum, extra = {}) {
     liveCanvasCount: getLiveCanvasCount(),
     userAgent:
       typeof navigator !== 'undefined' ? navigator.userAgent : '',
+    ...deviceCapabilities(),
     ...extra,
+  };
+}
+
+/** Enough to tell one failing iPhone apart from a working one in the logs. */
+function deviceCapabilities() {
+  if (typeof window === 'undefined') return {};
+  return {
+    screen: `${window.screen?.width || 0}x${window.screen?.height || 0}`,
+    viewport: `${window.innerWidth}x${window.innerHeight}`,
+    deviceMemory: navigator.deviceMemory ?? null,
+    hardwareConcurrency: navigator.hardwareConcurrency ?? null,
+    hasCreateImageBitmap: typeof window.createImageBitmap === 'function',
+    hasOffscreenCanvas: typeof window.OffscreenCanvas === 'function',
+    hasWasm: typeof WebAssembly === 'object',
   };
 }
 
@@ -123,6 +138,59 @@ export function logCanvasPixelCap(fields) {
       ...fields,
       ...canvasTelemetryExtras(fields.pageNum),
     }),
+  });
+}
+
+/**
+ * WebKit hands back a null 2D context once the process-wide canvas budget is
+ * gone. Report it as its own event so it is distinguishable from a pdf.js fault.
+ */
+export function logCanvasContextUnavailable(fields) {
+  reportClientError({
+    title: 'Canvas 2D context unavailable',
+    message: JSON.stringify({
+      kind: 'canvas_context_unavailable',
+      ...fields,
+      ...canvasTelemetryExtras(fields.pageNum),
+    }),
+  });
+}
+
+/** Render reported success paths but the canvas has no pixels. */
+export function logPageBlank(fields) {
+  reportClientError({
+    title: 'Page stayed blank',
+    message: JSON.stringify({
+      kind: 'page_blank',
+      ...fields,
+      ...canvasTelemetryExtras(fields.pageNum),
+    }),
+  });
+}
+
+/** One-shot notice that the session dropped to a lower resolution budget. */
+export function logRenderDegraded(fields) {
+  reportClientError({
+    title: 'Render degraded to low resolution',
+    message: JSON.stringify({
+      kind: 'render_degraded',
+      ...fields,
+      ...canvasTelemetryExtras(fields.pageNum),
+    }),
+  });
+}
+
+export function logPageRenderError(err, fields) {
+  reportClientError({
+    title: 'Page render failed',
+    message: JSON.stringify({
+      kind: 'page_render_error',
+      error: describeError(err),
+      errorName: err?.name || '',
+      ...fields,
+      ...canvasTelemetryExtras(fields.pageNum),
+    }),
+    stack: err?.stack,
   });
 }
 

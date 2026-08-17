@@ -7,6 +7,7 @@ export const PDF_LOAD_OPTIONS = {
   cMapPacked: true,
   standardFontDataUrl: '/pdfjs-dist/standard_fonts/',
   wasmUrl: '/pdfjs-dist/wasm/',
+  iccUrl: '/pdfjs-dist/iccs/',
   enableXfa: true,
   disableStream: false,
   disableRange: false,
