@@ -1,6 +1,14 @@
-import * as pdfjsLib from 'pdfjs-dist';
+/**
+ * Legacy build, not the default modern one. pdf.js 6 calls very new stdlib APIs
+ * (e.g. Map.prototype.getOrInsertComputed inside page.render) that iOS Safari
+ * below 18.4 lacks, which threw "getOrInsertComputed is not a function" on every
+ * page. Only the legacy bundles carry the polyfills. Main thread and worker each
+ * need their own copy — a worker has a separate global scope.
+ */
+import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdfjs-dist/build/pdf.worker.min.mjs';
+pdfjsLib.GlobalWorkerOptions.workerSrc =
+  '/pdfjs-dist/legacy/build/pdf.worker.min.mjs';
 
 export const PDF_LOAD_OPTIONS = {
   cMapUrl: '/pdfjs-dist/cmaps/',
