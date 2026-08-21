@@ -359,9 +359,12 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
     }
 
     if (e.data === 'flipping') {
-      // Sound length tracks the live flip so it ends with the page
+      // Cover creak should start with the door motion. Do NOT pass the full
+      // mobile door duration (2600ms) — useSound end-aligns to that and the
+      // short cover clip then starts ~2s late. COVER_FLIP_MS keeps mobile in
+      // the same early-swing window as desktop spreads.
       if (atCover) {
-        playCoverTurn(isMobile ? 2600 : COVER_FLIP_MS);
+        playCoverTurn(COVER_FLIP_MS);
       } else {
         playPageTurn(PAGE_FLIP_MS);
       }

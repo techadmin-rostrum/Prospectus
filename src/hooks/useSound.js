@@ -130,9 +130,16 @@ export function useSound() {
             : 1.2;
       const flipSec = Math.max(0.35, (durationMs || 900) / 1000);
 
+      // Cover clip is short (~0.7s). End-aligning it to a long door swing
+      // (mobile custom cover is 2.6s) made the creak arrive near the end.
+      // Cap so it always rides the opening motion, like desktop spreads.
+      const MAX_COVER_ALIGN_DELAY_MS = 450;
       let delayMs = 0;
       if (kind === 'cover' && flipSec > natural) {
-        delayMs = Math.round((flipSec - natural) * 1000);
+        delayMs = Math.min(
+          MAX_COVER_ALIGN_DELAY_MS,
+          Math.round((flipSec - natural) * 1000)
+        );
       }
 
       const start = () => {
