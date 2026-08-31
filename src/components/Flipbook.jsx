@@ -78,7 +78,10 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
   const prefersReducedMotion =
     typeof window !== 'undefined' &&
     window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  const flipDurationMs = prefersReducedMotion ? 0 : PAGE_FLIP_MS;
+  // page-flip throws "Invalid flipping time" when flippingTime <= 0. iOS users
+  // with Settings → Accessibility → Motion → Reduce Motion hit that on init.
+  const MIN_FLIP_MS = 1;
+  const flipDurationMs = prefersReducedMotion ? MIN_FLIP_MS : PAGE_FLIP_MS;
   const coverTransitionMs = prefersReducedMotion ? 0 : COVER_FLIP_MS;
 
   useEffect(() => {

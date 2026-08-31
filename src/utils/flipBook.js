@@ -125,7 +125,7 @@ function turnToPageInstant(pageFlip, targetIndex) {
     settings.flippingTime = 1;
     pageFlip.turnToPage(targetIndex);
   } finally {
-    settings.flippingTime = previousFlippingTime;
+    settings.flippingTime = Math.max(1, previousFlippingTime || 1);
   }
 
   // An instant jump bypasses the animation callback entirely, so nothing
@@ -140,10 +140,12 @@ export function applyFlipDuration(pageFlip, targetMs) {
   const pageW = pageFlip.getRender?.()?.getRect?.()?.pageWidth || 400;
   const pathEstimate = Math.max(pageW * 2 - pageW * 0.1, 200);
 
-  settings.flippingTime =
+  settings.flippingTime = Math.max(
+    1,
     pathEstimate >= 1000
       ? targetMs
-      : Math.ceil(targetMs * (1000 / pathEstimate));
+      : Math.ceil(targetMs * (1000 / pathEstimate))
+  );
 }
 
 function asDeliberateFlip(pageFlip, run) {
