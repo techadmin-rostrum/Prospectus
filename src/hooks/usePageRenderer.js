@@ -20,9 +20,18 @@ import { registerPageRendererReset } from '../utils/resetFlipbookRuntime';
  * in-flight render can never paint into the next visit's canvases.
  */
 
-export const MAX_CANVAS_PIXELS = 16_000_000;
+/**
+ * Desktop devices have ample memory — allow much larger canvases for
+ * sharp rendering of high-res PDFs. Mobile stays conservative because
+ * iOS Safari enforces a hard ~256 MB process-wide canvas budget.
+ */
+const IS_MOBILE_DEVICE =
+  typeof navigator !== 'undefined' &&
+  /(iPhone|iPad|iPod|Android)/i.test(navigator.userAgent);
+
+export const MAX_CANVAS_PIXELS = IS_MOBILE_DEVICE ? 16_000_000 : 64_000_000;
 /** Budget once a device has proven it cannot serve full-resolution buffers. */
-const DEGRADED_CANVAS_PIXELS = 4_000_000;
+const DEGRADED_CANVAS_PIXELS = IS_MOBILE_DEVICE ? 4_000_000 : 16_000_000;
 
 const globalCache = new Map();
 const inflightRenders = new Map();
@@ -47,6 +56,9 @@ function wipePageRendererState() {
   cancelAllPageRenders();
   resetLiveCanvasTracking();
   inflightRenders.clear();
+  // Let each new session start at full quality — a transient failure in
+  // one document should not permanently penalize all future renders.
+  degradedRender = false;
   for (const [, value] of globalCache.entries()) {
     try {
       value.bitmap?.close?.();
@@ -170,7 +182,8 @@ export function usePageRenderer() {
     if (!page || !canvas) return false;
 
     const pageNum = page.pageNumber;
-    const dpr = degradedRender ? 1 : Math.min(window.devicePixelRatio || 1, 2);
+    const MAX_DPR = IS_MOBILE_DEVICE ? 2 : 3;
+    const dpr = degradedRender ? 1 : Math.min(window.devicePixelRatio || 1, MAX_DPR);
 
     const unscaledViewport = page.getViewport({ scale: 1 });
     const scaleX = containerWidth / unscaledViewport.width;

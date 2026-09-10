@@ -566,10 +566,10 @@ export default function Flipbook({ pdfSrc, title, theme = 'pg' }) {
         sessionId={renderSessionIdRef.current}
         width={pageW}
         height={pageH}
-        extraScale={1}
+        extraScale={zoomLevel > 1 ? Math.min(zoomLevel, 2) : 1}
       />
     )),
-    [numPages, pdfDocument, pdfSrc, pageW, pageH]
+    [numPages, pdfDocument, pdfSrc, pageW, pageH, zoomLevel]
   );
 
   if (error) {
